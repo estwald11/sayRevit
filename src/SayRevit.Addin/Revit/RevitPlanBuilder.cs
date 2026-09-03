@@ -216,7 +216,177 @@ namespace SayRevit.Addin.Revit
             {
                 BuildBranches(ctx, run.Branches[b], type, label + "stacchi gruppo " + (b + 1) + ": ");
             }
+
+            if (run.CapEnds) CapRunEnds(ctx, label + "fondelli: ");
             return ctx;
+        }
+
+        // ------------------------------------------------------- fondelli (Enddeckel)
+
+        /// <summary>Famiglie di fondello per materiale; per gli altri materiali per ora nessun fondello.</summary>
+        private static string CapFamilyFor(string pipeTypeName)
+        {
+            var n = TextUtil.Fold(pipeTypeName ?? string.Empty);
+            if (n.Contains("inox")) return "ATZ_INOX-WELD_Enddeckel";
+            if (n.Contains("acciaio nero") || n.Contains("c-stahl") || n.Contains("stahl") || n.Contains("nero"))
+                return "ATZ_C-STAHL-WELD_5_Enddeckel";
+            return null;
+        }
+
+        /// <summary>Posiziona un fondello su ciascuna estremità libera del tratto principale.</summary>
+        private void CapRunEnds(RunContext ctx, string label)
+        {
+            if (ctx.Run.Kind != MepKind.Pipe) return;
+
+            var typeName = (_doc.GetElement(ctx.TypeId) as MEPCurveType)?.Name ?? string.Empty;
+            var familyName = CapFamilyFor(typeName);
+            if (familyName == null)
+            {
+                _report.Messages.Add(label + "nessuna famiglia definita per \"" + typeName +
+                                     "\" (per ora solo inox e acciaio nero): estremità lasciate aperte.");
+                return;
+            }
+
+            var symbol = new FilteredElementCollector(_doc)
+                .OfCategory(BuiltInCategory.OST_PipeFitting)
+                .OfClass(typeof(FamilySymbol))
+                .Cast<FamilySymbol>()
+                .FirstOrDefault(s => string.Equals(s.Family?.Name, familyName, StringComparison.OrdinalIgnoreCase));
+            if (symbol == null)
+            {
+                _report.Warnings.Add(label + "famiglia \"" + familyName + "\" non caricata nel progetto: estremità lasciate aperte.");
+                return;
+            }
+            if (!symbol.IsActive)
+            {
+                symbol.Activate();
+                _doc.Regenerate();
+            }
+
+            PlaceCap(symbol, ctx, ctx.Start, label + "inizio: ");
+            PlaceCap(symbol, ctx, ctx.End, label + "fine: ");
+        }
+
+        private void PlaceCap(FamilySymbol symbol, RunContext ctx, XYZ point, string label)
+        {
+            Connector target = null;
+            foreach (var piece in ctx.Pieces)
+            {
+                target = FindConnectorAt(piece, point);
+                if (target != null) break;
+            }
+            if (target == null)
+            {
+                _report.Warnings.Add(label + "connettore dell'estremità non trovato.");
+                return;
+            }
+            if (target.IsConnected) return; // estremità già occupata (es. tratti concatenati)
+
+            FamilyInstance cap = null;
+            try
+            {
+                cap = _doc.Create.NewFamilyInstance(target.Origin, symbol, ctx.Level,
+                    Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                _doc.Regenerate();
+
+                var capConn = GetCapConnector(cap);
+                if (capConn == null) throw new InvalidOperationException("la famiglia non ha un connettore tubazione.");
+
+                TrySizeCap(cap, target);
+                _doc.Regenerate();
+                capConn = GetCapConnector(cap);
+
+                // orienta il fondello: il suo connettore deve guardare il tubo (assi Z opposti)
+                var capZ = capConn.CoordinateSystem.BasisZ;
+                var wanted = target.CoordinateSystem.BasisZ.Negate();
+                var angle = capZ.AngleTo(wanted);
+                if (angle > 1e-6)
+                {
+                    var axis = capZ.CrossProduct(wanted);
+                    if (axis.GetLength() < 1e-9)
+                    {
+                        // vettori opposti: qualsiasi asse perpendicolare va bene
+                        axis = capZ.CrossProduct(XYZ.BasisZ);
+                        if (axis.GetLength() < 1e-9) axis = capZ.CrossProduct(XYZ.BasisX);
+                    }
+                    ElementTransformUtils.RotateElement(_doc, cap.Id,
+                        Line.CreateUnbound(capConn.Origin, axis.Normalize()), angle);
+                    _doc.Regenerate();
+                    capConn = GetCapConnector(cap);
+                }
+
+                var delta = target.Origin - capConn.Origin;
+                if (delta.GetLength() > 1e-9)
+                {
+                    ElementTransformUtils.MoveElement(_doc, cap.Id, delta);
+                    _doc.Regenerate();
+                    capConn = GetCapConnector(cap);
+                }
+
+                capConn.ConnectTo(target);
+                _report.CreatedIds.Add(cap.Id);
+                _report.Fittings++;
+
+                if (Math.Abs(capConn.Radius - target.Radius) > TolFt / 5)
+                    _report.Warnings.Add(label + "misura del fondello non adattata automaticamente: verifica il DN nella famiglia.");
+            }
+            catch (Exception ex)
+            {
+                _report.Warnings.Add(label + "fondello non posizionato: " + ex.Message);
+                if (cap != null)
+                {
+                    try { _doc.Delete(cap.Id); } catch { }
+                }
+            }
+        }
+
+        private static Connector GetCapConnector(FamilyInstance cap)
+        {
+            var cm = cap.MEPModel?.ConnectorManager;
+            if (cm == null) return null;
+            foreach (Connector c in cm.Connectors)
+            {
+                if (c.ConnectorType == ConnectorType.End) return c;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Adatta la misura del fondello al tubo: prima provando il raggio del connettore,
+        /// poi cercando un parametro d'istanza dal nome riconducibile al diametro.
+        /// </summary>
+        private void TrySizeCap(FamilyInstance cap, Connector target)
+        {
+            try
+            {
+                var capConn = GetCapConnector(cap);
+                if (capConn != null && Math.Abs(capConn.Radius - target.Radius) > 1e-9)
+                {
+                    capConn.Radius = target.Radius;
+                    return;
+                }
+            }
+            catch
+            {
+                // raggio guidato da parametro: si passa alla ricerca per nome
+            }
+
+            var keywords = new[] { "dn", "nominal", "durchmesser", "diametro", "diameter", "nennweite" };
+            foreach (Parameter p in cap.Parameters)
+            {
+                if (p.IsReadOnly || p.StorageType != StorageType.Double) continue;
+                var name = TextUtil.Fold(p.Definition?.Name ?? string.Empty);
+                if (!keywords.Any(k => name.Contains(k))) continue;
+                try
+                {
+                    p.Set(target.Radius * 2);
+                    return;
+                }
+                catch
+                {
+                    // parametro non impostabile: si prova il successivo
+                }
+            }
         }
 
         // ------------------------------------------------------------- branches

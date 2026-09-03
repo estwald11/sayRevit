@@ -143,6 +143,12 @@ namespace SayRevit.Core.Model
         /// <summary>Scostamento laterale rispetto al primo tratto (mm, positivo = sinistra della direzione).</summary>
         public double? OffsetSideMm { get; set; }
 
+        /// <summary>
+        /// True = alle estremità libere del tratto vengono posizionati dei fondelli (Enddeckel),
+        /// se per il materiale del tipo è definita una famiglia (usato dal collettore).
+        /// </summary>
+        public bool CapEnds { get; set; }
+
         public List<MepBranch> Branches { get; } = new List<MepBranch>();
     }
 

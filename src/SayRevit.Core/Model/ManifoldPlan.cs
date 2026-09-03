@@ -201,6 +201,8 @@ namespace SayRevit.Core.Model
 
             var result = new ParseResult { Success = true, Plan = plan };
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
+            result.Notes.Add("Fondelli (Enddeckel) alle estremità delle basi: automatici per inox e acciaio nero; " +
+                             "per gli altri materiali le estremità restano aperte.");
             if (WithReturn)
             {
                 plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions, result));
@@ -259,7 +261,8 @@ namespace SayRevit.Core.Model
                 Size = MepSize.Round(headerDn, true),
                 LengthMm = HeaderLengthMm,
                 Direction = HeaderDirection,
-                ExplicitTypeName = string.IsNullOrWhiteSpace(PipeTypeName) ? null : PipeTypeName.Trim()
+                ExplicitTypeName = string.IsNullOrWhiteSpace(PipeTypeName) ? null : PipeTypeName.Trim(),
+                CapEnds = true // fondelli (Enddeckel) automatici alle estremità della base
             };
         }
 

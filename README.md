@@ -119,6 +119,13 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   ogni circuito di ritorno cade a metà tra due circuiti di mandata. Se la sporgenza è minore
   di mezzo interasse l'ultimo stacco di ritorno esce dalla base e l'anteprima lo segnala.
 
+- **Fondelli (Enddeckel)**: alle quattro estremità delle basi (mandata e ritorno) vengono
+  posizionati automaticamente dei fondelli, orientati, dimensionati e collegati al tubo.
+  La famiglia dipende dal materiale del tipo scelto: nomi con *inox* →
+  `ATZ_INOX-WELD_Enddeckel`, con *acciaio nero / C-Stahl* → `ATZ_C-STAHL-WELD_5_Enddeckel`;
+  per gli altri materiali, per ora, le estremità restano aperte (segnalato in anteprima).
+  Se la famiglia non è caricata nel progetto compare un avviso.
+
 A differenza della modalità testuale, **i circuiti non vengono raccordati**: il collettore
 resta un tubo unico (nessun `BreakCurve`) e ogni circuito parte dall'asse del collettore,
 semplicemente sovrapposto. Un raccordo a T di Revit spezzerebbe il collettore e

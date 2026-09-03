@@ -184,6 +184,16 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
+        public void LeBasi_ChiedonoIFondelliAlleEstremita()
+        {
+            var r = PlanWithReturn(20, 20).ToParseResult();
+            Assert.All(r.Plan.Runs, run => Assert.True(run.CapEnds));
+            Assert.Contains(r.Notes, n => n.Contains("Enddeckel"));
+            // il default di MepRun resta false: la modalità testuale non mette fondelli
+            Assert.False(new MepRun().CapEnds);
+        }
+
+        [Fact]
         public void StacchiDelParserTestuale_RestanoRaccordati()
         {
             // Il default di MepBranch non deve cambiare: la modalità testuale continua a creare i T.
