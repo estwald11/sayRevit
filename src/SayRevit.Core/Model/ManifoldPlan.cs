@@ -67,7 +67,7 @@ namespace SayRevit.Core.Model
         /// <summary>Distanza tra l'asse della mandata e quello del ritorno (mm).</summary>
         public double ReturnOffsetMm { get; set; } = 300;
 
-        public DirectionKind HeaderDirection { get; set; } = DirectionKind.PlusX;
+        public DirectionKind HeaderDirection { get; set; } = DirectionKind.MinusX;
 
         public DirectionKind CircuitDirection { get; set; } = DirectionKind.Down;
 

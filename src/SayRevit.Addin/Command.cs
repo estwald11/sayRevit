@@ -74,18 +74,24 @@ namespace SayRevit.Addin
 
             var report = new RevitPlanBuilder(doc).Build(window.Result.Plan, options);
 
-            var sb = new StringBuilder();
-            sb.AppendLine(report.Summary());
-            foreach (var m in report.Messages) sb.AppendLine("• " + m);
-            foreach (var w in report.Warnings) sb.AppendLine("⚠ " + w);
-
-            var dialog = new TaskDialog("sayRevit")
+            // In modalità Collettore la creazione riuscita e pulita non interrompe l'utente con
+            // il riepilogo; il dialogo resta per gli errori e per gli avvisi (che vanno visti).
+            var silent = window.ManifoldMode && report.Succeeded && report.Warnings.Count == 0;
+            if (!silent)
             {
-                MainInstruction = report.Succeeded ? "Elementi creati" : "Creazione non riuscita",
-                MainContent = sb.ToString(),
-                CommonButtons = TaskDialogCommonButtons.Close
-            };
-            dialog.Show();
+                var sb = new StringBuilder();
+                sb.AppendLine(report.Summary());
+                foreach (var m in report.Messages) sb.AppendLine("• " + m);
+                foreach (var w in report.Warnings) sb.AppendLine("⚠ " + w);
+
+                var dialog = new TaskDialog("sayRevit")
+                {
+                    MainInstruction = report.Succeeded ? "Elementi creati" : "Creazione non riuscita",
+                    MainContent = sb.ToString(),
+                    CommonButtons = TaskDialogCommonButtons.Close
+                };
+                dialog.Show();
+            }
 
             if (report.Succeeded && report.CreatedIds.Count > 0)
             {
