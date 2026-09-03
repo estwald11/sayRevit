@@ -102,8 +102,11 @@ per .NET 10 (Revit 2027) caricato in un Revit su .NET 8 (2025/2026) dà l'errore
 Al riavvio di Revit compare la scheda **sayRevit → Testo → Tubazioni/Canali**.
 Per rimuovere: `.\scripts\uninstall.ps1 -RevitVersion 2025`.
 
-Compilazione manuale: `dotnet build src/SayRevit.Addin/SayRevit.Addin.csproj -p:RevitVersion=2024`
-(output in `artifacts/<versione>/`). Opzioni: `-p:RevitFramework=net8.0-windows` forza il framework,
+Compilazione manuale: `dotnet build src/SayRevit.Addin/SayRevit.Addin.csproj -c Release -p:RevitVersion=<anno>`.
+I file compilati finiscono in `artifacts/<anno>/`. Installazione manuale: crea la cartella
+`%APPDATA%\Autodesk\Revit\Addins\<anno>\SayRevit`, copia **il contenuto** di `artifacts/<anno>/`
+(tutti i file, non la cartella) dentro `SayRevit`, poi copia il singolo file `SayRevit.addin` anche in
+`%APPDATA%\Autodesk\Revit\Addins\<anno>\` (accanto alla cartella `SayRevit`, non al suo interno). Opzioni: `-p:RevitFramework=net8.0-windows` forza il framework,
 `-p:RevitApiDir="C:\Program Files\Autodesk\Revit 2026"` usa le DLL API dell'installazione invece dei
 pacchetti NuGet. Il progetto compila anche su Linux/macOS (riferimenti Revit
 API dai pacchetti NuGet `Nice3point.Revit.Api.*`, interfaccia WPF costruita da codice senza XAML).
