@@ -135,7 +135,14 @@ namespace SayRevit.Addin.UI
 
             var sb = new System.Text.StringBuilder();
             sb.Append("Tipo \"").Append(type.Name).Append("\": ");
-            if (type.AvailableDiametersMm.Count > 0)
+            if (type.Sizes.Any(z => z.InnerMm > 0))
+            {
+                // il DN della base viene scelto sul diametro interno: mostrarlo aiuta a capire la scelta
+                sb.Append("misure disponibili ");
+                sb.Append(string.Join(", ", type.Sizes.Select(z => "DN" + MepSize.Fmt(z.NominalMm) +
+                    (z.InnerMm > 0 ? " (Øint " + MepSize.Fmt(z.InnerMm) + ")" : string.Empty))));
+            }
+            else if (type.AvailableDiametersMm.Count > 0)
             {
                 sb.Append("misure disponibili DN ");
                 sb.Append(string.Join(", ", type.AvailableDiametersMm.Select(MepSize.Fmt)));
@@ -407,6 +414,8 @@ namespace SayRevit.Addin.UI
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
                 PipeTypeName = _pipeType.SelectedItem as string
             };
+            var type = SelectedType;
+            if (type != null) plan.HeaderSizeCandidates.AddRange(type.Sizes);
             if (_autoHeaderDn.IsChecked != true)
             {
                 var dn = ParseDn(_headerDn.Text);

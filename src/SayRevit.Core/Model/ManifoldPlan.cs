@@ -68,6 +68,12 @@ namespace SayRevit.Core.Model
         /// <summary>Nome esatto del tipo di tubazione scelto nel progetto; null = tipo predefinito.</summary>
         public string PipeTypeName { get; set; }
 
+        /// <summary>
+        /// Misure del tipo scelto (DN + Øinterno): se presenti, il DN automatico della base è
+        /// quello col diametro INTERNO minimo tra quelli ≥ D calcolato dalla formula.
+        /// </summary>
+        public List<CatalogPipeSize> HeaderSizeCandidates { get; } = new List<CatalogPipeSize>();
+
         /// <summary>Circuiti con un DN valido, gli unici che vengono modellati.</summary>
         public List<ManifoldCircuit> ValidCircuits()
         {
@@ -88,10 +94,36 @@ namespace SayRevit.Core.Model
             }
         }
 
-        /// <summary>Diametro della formula arrotondato al DN commerciale superiore (mai sottodimensionato).</summary>
+        /// <summary>
+        /// Tra le misure del tipo, quella col diametro interno minimo ma ≥ D della formula;
+        /// se nessuna basta, la più grande (segnalato a valle); null senza dati sugli interni.
+        /// </summary>
+        public CatalogPipeSize PickHeaderSize()
+        {
+            var d = ComputedHeaderDnMm;
+            if (d <= 0) return null;
+            var usable = HeaderSizeCandidates
+                .Where(c => c != null && c.InnerMm > 0 && c.NominalMm > 0)
+                .OrderBy(c => c.InnerMm).ThenBy(c => c.NominalMm)
+                .ToList();
+            if (usable.Count == 0) return null;
+            var pick = usable.FirstOrDefault(c => c.InnerMm >= d - 0.001);
+            return pick ?? usable[usable.Count - 1];
+        }
+
+        /// <summary>
+        /// DN automatico della base: dalla misura scelta con <see cref="PickHeaderSize"/>;
+        /// senza diametri interni si ripiega sull'arrotondamento alla serie DN commerciale.
+        /// </summary>
         public double AutoHeaderDnMm
         {
-            get { return ComputedHeaderDnMm <= 0 ? 0 : SnapUpToDn(ComputedHeaderDnMm); }
+            get
+            {
+                var computed = ComputedHeaderDnMm;
+                if (computed <= 0) return 0;
+                var pick = PickHeaderSize();
+                return pick != null ? pick.NominalMm : SnapUpToDn(computed);
+            }
         }
 
         public double EffectiveHeaderDnMm
@@ -188,8 +220,27 @@ namespace SayRevit.Core.Model
             var result = new ParseResult { Success = true, Plan = plan };
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
-                result.Notes.Add("DN collettore dalla formula D = √(1,5·ΣS/0,785): " + MepSize.Fmt(ComputedHeaderDnMm) +
-                                 " mm → DN" + MepSize.Fmt(headerDn) + " (arrotondato alla serie commerciale).");
+            {
+                var computed = MepSize.Fmt(ComputedHeaderDnMm);
+                var pick = PickHeaderSize();
+                if (pick != null && pick.InnerMm >= ComputedHeaderDnMm - 0.001)
+                {
+                    result.Notes.Add("DN collettore dalla formula D = √(1,5·ΣS/0,785): " + computed +
+                                     " mm → DN" + MepSize.Fmt(pick.NominalMm) + " (Øint " + MepSize.Fmt(pick.InnerMm) +
+                                     " mm, il minimo ≥ D tra le misure del tipo).");
+                }
+                else if (pick != null)
+                {
+                    result.Warnings.Add("Nessuna misura del tipo ha Øint ≥ " + computed + " mm (formula): uso la più grande, DN" +
+                                        MepSize.Fmt(pick.NominalMm) + " (Øint " + MepSize.Fmt(pick.InnerMm) + " mm).");
+                }
+                else
+                {
+                    result.Notes.Add("DN collettore dalla formula D = √(1,5·ΣS/0,785): " + computed +
+                                     " mm → DN" + MepSize.Fmt(headerDn) +
+                                     " (serie commerciale: diametri interni del tipo non disponibili).");
+                }
+            }
             result.Notes.Add("Base lunga " + MepSize.Fmt(HeaderLengthMm) + " mm: sporge di " + MepSize.Fmt(OverhangMm) +
                              " mm dal bordo del primo e dell'ultimo circuito.");
 

@@ -91,7 +91,9 @@ namespace SayRevit.Addin.Revit
                 ct.HasTransitions = rpm.GetNumberOfRules(RoutingPreferenceRuleGroupType.Transitions) > 0;
 
                 var n = rpm.GetNumberOfRules(RoutingPreferenceRuleGroupType.Segments);
-                var sizes = new SortedSet<double>();
+                // DN → diametro interno: se lo stesso DN compare in più segmenti si tiene
+                // l'interno più piccolo (scelta prudente per il dimensionamento).
+                var sizes = new SortedDictionary<double, double>();
                 for (var i = 0; i < n; i++)
                 {
                     var rule = rpm.GetRule(RoutingPreferenceRuleGroupType.Segments, i);
@@ -100,10 +102,18 @@ namespace SayRevit.Addin.Revit
                     if (seg == null) continue;
                     foreach (MEPSize s in seg.GetSizes())
                     {
-                        sizes.Add(Math.Round(Units.FtToMm(s.NominalDiameter), 1));
+                        var nominal = Math.Round(Units.FtToMm(s.NominalDiameter), 1);
+                        var inner = Math.Round(Units.FtToMm(s.InnerDiameter), 1);
+                        if (!sizes.TryGetValue(nominal, out var existing) || (inner > 0 && (existing <= 0 || inner < existing)))
+                            sizes[nominal] = inner;
                     }
                 }
-                ct.AvailableDiametersMm.AddRange(sizes);
+                foreach (var kv in sizes)
+                {
+                    ct.AvailableDiametersMm.Add(kv.Key);
+                    if (ct.Kind == MepKind.Pipe)
+                        ct.Sizes.Add(new CatalogPipeSize { NominalMm = kv.Key, InnerMm = kv.Value });
+                }
             }
             catch
             {

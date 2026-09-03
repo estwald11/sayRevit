@@ -100,10 +100,13 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
 - **Circuiti**: si inserisce un circuito per volta indicandone il **DN**. Il pulsante **+**
   aggiunge una riga (lo fa anche **Invio** dal campo DN); **✕** la rimuove. Le righe si
   numerano da sole `C1`, `C2`, … e quelle lasciate vuote vengono ignorate.
-- **DN collettore**: con *automatico* attivo è calcolato con la formula
-  **D = √(1,5·(S₁+S₂+…)/0,785)** sulle sezioni dei circuiti (con S = 0,785·dn² si
-  semplifica in √(1,5·Σdn²)) e arrotondato al DN commerciale superiore; l'anteprima
-  mostra sia il valore della formula sia il DN scelto. Togliendo la spunta lo si impone a mano.
+- **DN collettore**: con *automatico* attivo, la formula **D = √(1,5·(S₁+S₂+…)/0,785)**
+  sulle sezioni dei circuiti (con S = 0,785·dn² si semplifica in √(1,5·Σdn²)) dà il diametro
+  richiesto; il DN scelto è la misura del tipo col **diametro interno minimo tra quelli ≥ D**
+  (gli interni vengono letti dai segmenti delle preferenze di instradamento — per un PEX o
+  una ghisa contano quelli, non il nominale). Se nessuna misura basta si usa la più grande e
+  si avvisa; senza dati sugli interni si ripiega sull'arrotondamento alla serie DN commerciale.
+  L'anteprima mostra formula, DN scelto e Øint. Togliendo la spunta lo si impone a mano.
 - **Interasse**: distanza tra due circuiti consecutivi. La base sporge di **5 cm oltre il
   bordo** del primo e dell'ultimo circuito (bordo = asse ± DN/2), quindi con DN d'estremità
   diversi le due sporgenze d'asse sono diverse.

@@ -57,6 +57,53 @@ namespace SayRevit.Core.Tests
             Assert.Equal(34.64, Plan(20, 20).ComputedHeaderDnMm, 2);
         }
 
+        private static void AddSizes(ManifoldPlan p, params double[][] nominalInner)
+        {
+            foreach (var z in nominalInner)
+                p.HeaderSizeCandidates.Add(new CatalogPipeSize { NominalMm = z[0], InnerMm = z[1] });
+        }
+
+        [Fact]
+        public void DnBase_MinimoDiametroInternoMaggioreOUgualeAllaFormula()
+        {
+            // 2×DN20 → D formula ≈ 34,64 mm. Serve la misura col Øint MINIMO tra quelli ≥ 34,64.
+            var p = Plan(20, 20);
+            AddSizes(p, new[] { 32.0, 28.4 }, new[] { 40.0, 36.2 }, new[] { 50.0, 45.8 });
+            var pick = p.PickHeaderSize();
+            Assert.Equal(40, pick.NominalMm);   // Øint 36,2 ≥ 34,64; DN50 (45,8) basterebbe ma non è il minimo
+            Assert.Equal(40, p.AutoHeaderDnMm);
+        }
+
+        [Fact]
+        public void DnBase_ContaIlDiametroInternoNonIlNominale()
+        {
+            // Tubo plastico con interni molto minori del DN: il nominale 40 NON basta
+            // anche se 40 ≥ 34,64, perché il suo interno è 32,6.
+            var p = Plan(20, 20);
+            AddSizes(p, new[] { 40.0, 32.6 }, new[] { 50.0, 40.8 }, new[] { 63.0, 51.4 });
+            Assert.Equal(50, p.AutoHeaderDnMm); // Øint 40,8 è il minimo ≥ 34,64
+        }
+
+        [Fact]
+        public void NessunaMisuraSufficiente_UsaLaPiuGrandeEAvvisa()
+        {
+            var p = Plan(50, 50, 50); // D formula ≈ 106 mm
+            AddSizes(p, new[] { 50.0, 45.8 }, new[] { 65.0, 60.2 });
+            Assert.Equal(65, p.AutoHeaderDnMm);
+            var r = p.ToParseResult();
+            Assert.Contains(r.Warnings, w => w.Contains("Nessuna misura del tipo"));
+        }
+
+        [Fact]
+        public void SenzaDiametriInterni_RipiegaSullaSerieCommerciale()
+        {
+            var p = Plan(20, 20, 20, 20); // D formula ≈ 49 mm
+            Assert.Null(p.PickHeaderSize());
+            Assert.Equal(50, p.AutoHeaderDnMm); // arrotondamento DN commerciale come prima
+            AddSizes(p, new[] { 40.0, 0.0 }); // interno non leggibile: non è un candidato valido
+            Assert.Equal(50, p.AutoHeaderDnMm);
+        }
+
         [Fact]
         public void DnCollettoreImpostato_HaLaPrecedenzaSullAutomatico()
         {

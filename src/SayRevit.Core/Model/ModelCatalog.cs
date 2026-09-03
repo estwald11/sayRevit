@@ -2,6 +2,15 @@ using System.Collections.Generic;
 
 namespace SayRevit.Core.Model
 {
+    /// <summary>Una misura disponibile per un tipo di tubazione: DN e diametro interno reale.</summary>
+    public sealed class CatalogPipeSize
+    {
+        public double NominalMm { get; set; }
+
+        /// <summary>Diametro interno (mm); 0 = non leggibile dal segmento.</summary>
+        public double InnerMm { get; set; }
+    }
+
     /// <summary>Descrizione di un tipo di tubazione/canale presente nel modello.</summary>
     public sealed class CatalogType
     {
@@ -11,6 +20,9 @@ namespace SayRevit.Core.Model
 
         /// <summary>Diametri nominali disponibili (mm) per il tipo, letti dalle preferenze di instradamento.</summary>
         public List<double> AvailableDiametersMm { get; } = new List<double>();
+
+        /// <summary>Misure disponibili con il diametro interno (solo tubazioni), stesse fonti.</summary>
+        public List<CatalogPipeSize> Sizes { get; } = new List<CatalogPipeSize>();
 
         public bool HasElbows { get; set; }
         public bool HasTees { get; set; }
