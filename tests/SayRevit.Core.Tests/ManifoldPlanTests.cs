@@ -43,6 +43,21 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
+        public void FormulaCalcolataAllaLettera_CoincideColCodice()
+        {
+            // D = √(1,5·(S₁+S₂+…)/0,785) con S = sezioni (aree) dei circuiti.
+            // Il codice usa la forma semplificata √(1,5·Σdn²): qui la formula viene
+            // calcolata alla lettera, passando dalle aree, e deve dare lo stesso valore.
+            var dns = new double[] { 20, 16, 25, 32 };
+            var sumAreas = dns.Sum(d => 0.785 * d * d);          // S₁+S₂+…
+            var literal = System.Math.Sqrt(1.5 * sumAreas / 0.785);
+
+            Assert.Equal(literal, Plan(dns).ComputedHeaderDnMm, 6);
+            // esempio a mano: 2×DN20 → S=314 mm² l'una → √(1,5·628/0,785) = √1200 ≈ 34,64
+            Assert.Equal(34.64, Plan(20, 20).ComputedHeaderDnMm, 2);
+        }
+
+        [Fact]
         public void DnCollettoreImpostato_HaLaPrecedenzaSullAutomatico()
         {
             var p = Plan(20, 20);
