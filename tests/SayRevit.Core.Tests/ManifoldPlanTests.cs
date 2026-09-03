@@ -275,8 +275,9 @@ namespace SayRevit.Core.Tests
             Assert.False(second.ContinuesPrevious);
 
             // basi perfettamente allineate: nessuna traslazione lungo l'asse, solo laterale
+            // (a sinistra della direzione -X, cioè in -Y: stesso lato che aveva con +X)
             Assert.Equal(0, second.OffsetAlongMm);
-            Assert.Equal(-300, second.OffsetSideMm);
+            Assert.Equal(300, second.OffsetSideMm);
 
             // stacchi identici (stessi DN, stesso ordine) su entrambi
             Assert.Equal(new double[] { 20, 16, 25 }, second.Branches.Select(b => b.Size.DiameterMm).ToArray());
