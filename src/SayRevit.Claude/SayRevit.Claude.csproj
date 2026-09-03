@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>SayRevit.Claude</RootNamespace>
+    <Description>Parser opzionale basato su Claude (Anthropic SDK) che produce lo stesso MepPlan del parser a regole.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Anthropic" Version="12.45.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SayRevit.Core/SayRevit.Core.csproj" />
+  </ItemGroup>
+</Project>

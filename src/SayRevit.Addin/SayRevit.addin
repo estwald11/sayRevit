@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Application">
+    <Name>sayRevit</Name>
+    <Assembly>SayRevit\SayRevit.Addin.dll</Assembly>
+    <AddInId>7C2F0B5E-3D7A-4B1E-9A6B-5E2C1F8D4A21</AddInId>
+    <FullClassName>SayRevit.Addin.App</FullClassName>
+    <VendorId>SAYR</VendorId>
+    <VendorDescription>sayRevit - interfaccia testuale per MEP</VendorDescription>
+  </AddIn>
+</RevitAddIns>

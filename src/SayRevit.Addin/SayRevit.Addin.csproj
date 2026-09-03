@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Versione di Revit di destinazione: dotnet build -p:RevitVersion=2024|2025|2026
+    2024 -> .NET Framework 4.8 ; 2025/2026 -> .NET 8 (Windows)
+  -->
+  <PropertyGroup>
+    <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
+    <TargetFramework Condition="'$(RevitVersion)' == '2024'">net48</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' != '2024'">net8.0-windows</TargetFramework>
+    <!-- L'interfaccia WPF è costruita da codice (nessun XAML): bastano i riferimenti alle librerie,
+         così il progetto si compila anche su Linux/macOS senza l'SDK WindowsDesktop. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RootNamespace>SayRevit.Addin</RootNamespace>
+    <AssemblyName>SayRevit.Addin</AssemblyName>
+    <PlatformTarget>x64</PlatformTarget>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <OutputPath>../../artifacts/$(RevitVersion)/</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Description>Add-in Revit: da descrizione testuale a tubazioni e canali.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPI" Version="$(RevitVersion).*" />
+    <PackageReference Include="Nice3point.Revit.Api.RevitAPIUI" Version="$(RevitVersion).*" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Reference Include="PresentationCore" />
+    <Reference Include="PresentationFramework" />
+    <Reference Include="WindowsBase" />
+    <Reference Include="System.Xaml" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net48'">
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../SayRevit.Core/SayRevit.Core.csproj" />
+    <ProjectReference Include="../SayRevit.Claude/SayRevit.Claude.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="SayRevit.addin" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

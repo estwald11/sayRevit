@@ -1,0 +1,46 @@
+using System.Collections.Generic;
+
+namespace SayRevit.Core.Model
+{
+    /// <summary>Descrizione di un tipo di tubazione/canale presente nel modello.</summary>
+    public sealed class CatalogType
+    {
+        public string Name { get; set; }
+        public MepKind Kind { get; set; }
+        public SizeShape Shape { get; set; } = SizeShape.Round;
+
+        /// <summary>Diametri nominali disponibili (mm) per il tipo, letti dalle preferenze di instradamento.</summary>
+        public List<double> AvailableDiametersMm { get; } = new List<double>();
+
+        public bool HasElbows { get; set; }
+        public bool HasTees { get; set; }
+        public bool HasTransitions { get; set; }
+        public bool HasTakeoffs { get; set; }
+    }
+
+    public sealed class CatalogSystem
+    {
+        public string Name { get; set; }
+        public string SystemClass { get; set; }
+    }
+
+    /// <summary>
+    /// Catalogo delle famiglie/tipi presenti nel documento Revit corrente.
+    /// Viene compilato dall'add-in e usato dai parser per riferirsi a nomi esistenti.
+    /// </summary>
+    public sealed class ModelCatalog
+    {
+        public List<CatalogType> PipeTypes { get; } = new List<CatalogType>();
+        public List<CatalogType> DuctTypes { get; } = new List<CatalogType>();
+        public List<CatalogSystem> PipingSystems { get; } = new List<CatalogSystem>();
+        public List<CatalogSystem> DuctSystems { get; } = new List<CatalogSystem>();
+        public List<string> Levels { get; } = new List<string>();
+        public string ActiveLevel { get; set; }
+        public string ProjectUnitsNote { get; set; }
+
+        public static ModelCatalog Empty()
+        {
+            return new ModelCatalog();
+        }
+    }
+}

@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>SayRevit.Core</RootNamespace>
+    <Description>Modello dell'intento MEP e parser testuale (IT/EN) indipendente da Revit.</Description>
+  </PropertyGroup>
+</Project>
