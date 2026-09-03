@@ -114,7 +114,7 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   interasse più avanti): entrambe le basi, identiche e allineate, si allungano di s/2 e
   nessuno stacco cade mai fuori dalla base.
 - **Lunghezza circuiti** e **partenza circuiti** (basso, alto, sinistra, destra, alternati).
-  La direzione dei collettori è fissa: -X (ovest). A creazione riuscita senza avvisi il
+  La direzione dei collettori è fissa: +X (est), col secondo collettore in +Y. A creazione riuscita senza avvisi il
   riepilogo non compare; il dialogo resta per errori e avvisi.
 - **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno: base
   **identica e perfettamente allineata** alla mandata (stesso DN, stessa lunghezza, stessi

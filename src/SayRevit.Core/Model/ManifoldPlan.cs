@@ -67,7 +67,7 @@ namespace SayRevit.Core.Model
         /// <summary>Distanza tra l'asse della mandata e quello del ritorno (mm).</summary>
         public double ReturnOffsetMm { get; set; } = 300;
 
-        public DirectionKind HeaderDirection { get; set; } = DirectionKind.MinusX;
+        public DirectionKind HeaderDirection { get; set; } = DirectionKind.PlusX;
 
         public DirectionKind CircuitDirection { get; set; } = DirectionKind.Down;
 
@@ -313,9 +313,8 @@ namespace SayRevit.Core.Model
                 ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i]));
 
             ret.OffsetAlongMm = 0;             // basi perfettamente allineate
-            // Alla sinistra della direzione: con la base verso -X il ritorno resta in -Y (sud),
-            // lo stesso lato che aveva con la base verso +X — altrimenti l'insieme appare
-            // ruotato di 180° attorno alla verticale invece che specchiato.
+            // Alla sinistra della direzione: con la base verso +X il secondo collettore sta
+            // in +Y (nord) — è la coppia di prima ruotata di 180° attorno alla verticale.
             ret.OffsetSideMm = ReturnOffsetMm;
             return ret;
         }

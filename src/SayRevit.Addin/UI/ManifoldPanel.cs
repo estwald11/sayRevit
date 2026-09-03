@@ -412,7 +412,7 @@ namespace SayRevit.Addin.UI
             {
                 SpacingMm = ParseNumber(_spacing.Text, 150),
                 CircuitLengthMm = ParseNumber(_circuitLength.Text, 500),
-                HeaderDirection = DirectionKind.MinusX, // direzione fissa: -X (ovest)
+                HeaderDirection = DirectionKind.PlusX, // direzione fissa: +X (est)
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
                 PipeTypeName = _pipeType.SelectedItem as string,
                 WithReturn = _withReturn.IsChecked == true,
