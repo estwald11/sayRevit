@@ -71,6 +71,7 @@ tbl = Table([
     [P("Revit 2024"), P(".NET Framework 4.8 (già incluso in Windows)"), P(".NET SDK 8")],
     [P("Revit 2025 / 2026"), P(".NET 8"), P(".NET SDK 8")],
     [P("Revit 2027"), P(".NET 10"), P(".NET SDK 10")],
+    [P("(qualsiasi)"), P("rilevato dallo script da RevitAPI.runtimeconfig.json"), P("SDK di versione uguale o superiore al runtime")],
 ], colWidths=[38 * mm, 70 * mm, 62 * mm])
 tbl.setStyle(TableStyle([
     ("BACKGROUND", (0, 0), (-1, 0), LIGHT),
@@ -99,9 +100,13 @@ story.append(P("In alternativa scarica lo zip del branch da GitHub (pulsante <i>
 story.append(P("3. Compilare e installare", h2))
 story.append(P("Sempre da PowerShell, nella cartella del progetto, esegui lo script indicando la <b>tua</b> versione di Revit:"))
 story.append(Code(".\\scripts\\install.ps1 -RevitVersion 2025      # oppure 2024, 2026, 2027"))
-story.append(P("Lo script compila l'add-in per la versione scelta e copia i file in:"))
+story.append(P("Lo script cerca Revit in <font face='DejaVuMono'>C:\\Program Files\\Autodesk\\Revit &lt;versione&gt;</font>, legge il runtime .NET "
+               "su cui gira quel Revit (file RevitAPI.runtimeconfig.json), compila l'add-in per lo stesso framework con le librerie API "
+               "dell'installazione e copia i file in:"))
 story.append(Code("%APPDATA%\\Autodesk\\Revit\\Addins\\<versione>\\SayRevit\\      (librerie)\n"
                   "%APPDATA%\\Autodesk\\Revit\\Addins\\<versione>\\SayRevit.addin  (manifest)"))
+story.append(P("<b>Importante:</b> indica la versione di Revit <b>realmente installata</b>. Un add-in compilato per una versione "
+               "diversa non viene caricato (vedi la tabella dei problemi). Se hai più versioni, ripeti lo script per ciascuna.", note))
 story.append(P("Se PowerShell rifiuta di eseguire lo script (\"l'esecuzione di script è disabilitata\"), sblocca l'esecuzione "
                "solo per la finestra corrente e riprova:", note))
 story.append(Code("Set-ExecutionPolicy -Scope Process Bypass\n.\\scripts\\install.ps1 -RevitVersion 2025"))
@@ -154,6 +159,10 @@ prob = Table([
     [P("La scheda sayRevit non compare"), P("Verifica che in <font face='DejaVuMono'>%APPDATA%\\Autodesk\\Revit\\Addins\\&lt;versione&gt;</font> ci siano "
                                            "il file SayRevit.addin e la cartella SayRevit, e che la versione passata allo script sia quella di Revit. "
                                            "Controlla di aver risposto \"Carica sempre\" all'avviso di sicurezza.")],
+    [P("Errore all'avvio: \"Could not load file or assembly 'System.Runtime, Version=10.0.0.0'\" (o 8.0.0.0)"),
+     P("L'add-in è stato compilato per un runtime .NET diverso da quello di Revit (es. compilato per Revit 2027/.NET 10 ma caricato "
+       "da Revit 2025-2026/.NET 8). Rimuovi con uninstall.ps1 e rilancia install.ps1 con la versione di Revit realmente installata: "
+       "lo script legge il runtime dalla cartella di Revit e compila di conseguenza.")],
     [P("Errore \"dotnet non riconosciuto\""), P("L'SDK .NET non è installato o PowerShell è stato aperto prima dell'installazione: installa l'SDK e riapri PowerShell.")],
     [P("\"Il progetto non contiene tipi di tubazione/canale\""), P("Il progetto non è basato su un modello MEP: apri un progetto con contenuti Sistemi/Meccanico o carica un tipo di tubazione.")],
     [P("Stacchi creati ma \"lasciati scollegati\""), P("Nel tipo di tubazione/canale usato apri <i>Preferenze di instradamento</i> e verifica che esistano famiglie per "

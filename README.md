@@ -92,13 +92,20 @@ cd sayRevit
 .\scripts\install.ps1 -RevitVersion 2025     # oppure 2024 / 2026 / 2027
 ```
 
-Lo script compila (`dotnet build -p:RevitVersion=…`), copia i file in
+Lo script cerca l'installazione in `C:\Program Files\Autodesk\Revit <versione>`, legge da
+`RevitAPI.runtimeconfig.json` il runtime .NET su cui gira quel Revit, compila per lo stesso framework
+usando le librerie API della cartella di Revit, poi copia i file in
 `%APPDATA%\Autodesk\Revit\Addins\<versione>\SayRevit\` e il manifest `SayRevit.addin` accanto.
+La versione passata allo script deve essere quella **effettivamente installata**: un add-in compilato
+per .NET 10 (Revit 2027) caricato in un Revit su .NET 8 (2025/2026) dà l'errore
+`Could not load file or assembly 'System.Runtime, Version=10.0.0.0'`.
 Al riavvio di Revit compare la scheda **sayRevit → Testo → Tubazioni/Canali**.
 Per rimuovere: `.\scripts\uninstall.ps1 -RevitVersion 2025`.
 
 Compilazione manuale: `dotnet build src/SayRevit.Addin/SayRevit.Addin.csproj -p:RevitVersion=2024`
-(output in `artifacts/<versione>/`). Il progetto compila anche su Linux/macOS (riferimenti Revit
+(output in `artifacts/<versione>/`). Opzioni: `-p:RevitFramework=net8.0-windows` forza il framework,
+`-p:RevitApiDir="C:\Program Files\Autodesk\Revit 2026"` usa le DLL API dell'installazione invece dei
+pacchetti NuGet. Il progetto compila anche su Linux/macOS (riferimenti Revit
 API dai pacchetti NuGet `Nice3point.Revit.Api.*`, interfaccia WPF costruita da codice senza XAML).
 
 ## Modalità Claude (opzionale)
