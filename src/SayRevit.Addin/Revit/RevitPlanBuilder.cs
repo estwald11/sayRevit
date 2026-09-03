@@ -23,6 +23,12 @@ namespace SayRevit.Addin.Revit
 
         /// <summary>Se true la Z del punto scelto viene mantenuta invece di livello+quota.</summary>
         public bool UsePickedZ { get; set; }
+
+        /// <summary>
+        /// Tipo di tubazione scelto nella finestra, usato quando il piano non ne indica uno.
+        /// Null = tipo predefinito del progetto.
+        /// </summary>
+        public string PipeTypeName { get; set; }
     }
 
     /// <summary>Esito della costruzione.</summary>
@@ -57,6 +63,7 @@ namespace SayRevit.Addin.Revit
         private List<PipingSystemType> _pipeSystems;
         private List<MechanicalSystemType> _ductSystems;
         private List<Level> _levels;
+        private string _defaultPipeTypeName;
 
         public RevitPlanBuilder(Document doc)
         {
@@ -66,6 +73,7 @@ namespace SayRevit.Addin.Revit
         public BuildReport Build(MepPlan plan, BuildOptions options)
         {
             options = options ?? new BuildOptions();
+            _defaultPipeTypeName = options.PipeTypeName;
             LoadCollections();
 
             if (_pipeTypes.Count == 0 && plan.Runs.Any(r => r.Kind == MepKind.Pipe))
@@ -227,6 +235,15 @@ namespace SayRevit.Addin.Revit
                 {
                     _report.Warnings.Add(label + "direzione dello stacco parallela al tratto: uso la direzione predefinita.");
                     bdir = BranchDirection(DirectionKind.Default, ctx.Dir, ctx.Run.Kind, i);
+                }
+
+                if (!branch.Connect)
+                {
+                    // Nessun raccordo: il tratto principale resta un tubo unico e lo stacco parte
+                    // dall'asse, semplicemente sovrapposto.
+                    CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id,
+                        point, point + bdir * Units.MmToFt(branch.LengthMm), size, label);
+                    continue;
                 }
 
                 var piece = FindPieceContaining(ctx, point);
@@ -572,7 +589,7 @@ namespace SayRevit.Addin.Revit
 
         private PipeType ResolvePipeType(MepRun run, string label)
         {
-            var chosen = ResolveType(_pipeTypes.Cast<MEPCurveType>().ToList(), run, label, t => true);
+            var chosen = ResolveType(_pipeTypes.Cast<MEPCurveType>().ToList(), run, label, _defaultPipeTypeName);
             return chosen as PipeType;
         }
 
@@ -589,16 +606,21 @@ namespace SayRevit.Addin.Revit
                 _report.Warnings.Add(label + "nessun tipo di canale " + (wantRect ? "rettangolare" : "circolare") + " nel progetto: uso il primo tipo disponibile.");
                 compatible = _ductTypes.Cast<MEPCurveType>().ToList();
             }
-            return ResolveType(compatible, run, label, t => true) as DuctType;
+            return ResolveType(compatible, run, label, null) as DuctType;
         }
 
-        private MEPCurveType ResolveType(List<MEPCurveType> candidates, MepRun run, string label, Func<MEPCurveType, bool> filter)
+        /// <param name="preferredName">
+        /// Tipo scelto nella finestra: vale quando il piano non indica né un tipo esplicito né un materiale.
+        /// </param>
+        private MEPCurveType ResolveType(List<MEPCurveType> candidates, MepRun run, string label, string preferredName)
         {
-            candidates = candidates.Where(filter).ToList();
             if (candidates.Count == 0) return null;
 
             if (!string.IsNullOrWhiteSpace(run.ExplicitTypeName))
             {
+                var exact = FindByExactName(candidates, run.ExplicitTypeName);
+                if (exact != null) return exact;
+
                 var best = candidates.Select(t => new { t, s = TextUtil.NameScore(t.Name, run.ExplicitTypeName) }).OrderByDescending(x => x.s).First();
                 if (best.s > 0)
                 {
@@ -624,6 +646,14 @@ namespace SayRevit.Addin.Revit
                 _report.Warnings.Add(label + "nessun tipo con \"" + string.Join("/", run.TypeHints) + "\" nel nome: uso il tipo predefinito.");
             }
 
+            // Tipo scelto dall'utente nella finestra.
+            if (!string.IsNullOrWhiteSpace(preferredName))
+            {
+                var exact = FindByExactName(candidates, preferredName);
+                if (exact != null) return exact;
+                _report.Warnings.Add(label + "il tipo \"" + preferredName + "\" scelto nella finestra non esiste in questo progetto: uso il tipo predefinito.");
+            }
+
             // Tipo predefinito del progetto, altrimenti il primo con segmenti definiti, altrimenti il primo.
             try
             {
@@ -638,6 +668,16 @@ namespace SayRevit.Addin.Revit
             }
             var withSegments = candidates.FirstOrDefault(t => SafeRuleCount(t, RoutingPreferenceRuleGroupType.Segments) > 0);
             return withSegments ?? candidates[0];
+        }
+
+        /// <summary>
+        /// Corrispondenza sul nome esatto: i nomi dei tipi si assomigliano molto
+        /// (es. "RM Inoxpres 304 (raffreddamento)" e "RM Inoxpres 316 (acqua potabile)"),
+        /// quindi la scelta fatta dall'utente non deve passare dal confronto approssimato.
+        /// </summary>
+        private static MEPCurveType FindByExactName(List<MEPCurveType> candidates, string name)
+        {
+            return candidates.FirstOrDefault(t => string.Equals(t.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
         private ElementId ResolvePipeSystem(MepRun run, string label)

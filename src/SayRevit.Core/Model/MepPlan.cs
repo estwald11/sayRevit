@@ -88,6 +88,13 @@ namespace SayRevit.Core.Model
         public double LengthMm { get; set; } = 500;
         public DirectionKind Direction { get; set; } = DirectionKind.Default;
 
+        /// <summary>
+        /// False = niente raccordo: il tratto principale non viene spezzato e lo stacco parte
+        /// dall'asse del tubo, semplicemente sovrapposto (usato dal collettore, dove il T
+        /// instraderebbe la derivazione con un raccordo della misura dello stacco).
+        /// </summary>
+        public bool Connect { get; set; } = true;
+
         /// <summary>Interasse tra gli stacchi (mm); se null si distribuiscono uniformemente.</summary>
         public double? SpacingMm { get; set; }
 

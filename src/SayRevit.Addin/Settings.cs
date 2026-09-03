@@ -14,6 +14,21 @@ namespace SayRevit.Addin
         public string StartMode { get; set; } = "origin";       // origin | pick
         public bool UsePickedZ { get; set; }
         public string LastText { get; set; } = string.Empty;
+        /// <summary>Nome del tipo di tubazione scelto nella finestra; vuoto = automatico.</summary>
+        public string PipeTypeName { get; set; } = string.Empty;
+
+        // --- modalità Collettore (parametrica) ---
+        public bool ManifoldMode { get; set; }
+        /// <summary>DN del collettore in mm; 0 = calcolato automaticamente dai circuiti.</summary>
+        public double ManifoldHeaderDnMm { get; set; }
+        public double ManifoldSpacingMm { get; set; } = 150;
+        public double ManifoldCircuitLengthMm { get; set; } = 500;
+        public string ManifoldHeaderDirection { get; set; } = "PlusX";
+        public string ManifoldCircuitDirection { get; set; } = "Down";
+        /// <summary>DN dei circuiti separati da ";" (es. "20;16;16").</summary>
+        public string ManifoldCircuits { get; set; } = string.Empty;
+        /// <summary>Tipo di tubazione scelto nella sezione collettore (scelta deterministica).</summary>
+        public string ManifoldPipeTypeName { get; set; } = string.Empty;
 
         public static string FilePath
         {
@@ -44,6 +59,15 @@ namespace SayRevit.Addin
                         case "StartMode": s.StartMode = v; break;
                         case "UsePickedZ": s.UsePickedZ = v == "true"; break;
                         case "LastText": s.LastText = v.Replace("\\n", "\n"); break;
+                        case "PipeTypeName": s.PipeTypeName = v; break;
+                        case "ManifoldMode": s.ManifoldMode = v == "true"; break;
+                        case "ManifoldHeaderDnMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var hdn)) s.ManifoldHeaderDnMm = hdn; break;
+                        case "ManifoldSpacingMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var sp)) s.ManifoldSpacingMm = sp; break;
+                        case "ManifoldCircuitLengthMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var cl)) s.ManifoldCircuitLengthMm = cl; break;
+                        case "ManifoldHeaderDirection": s.ManifoldHeaderDirection = v; break;
+                        case "ManifoldCircuitDirection": s.ManifoldCircuitDirection = v; break;
+                        case "ManifoldCircuits": s.ManifoldCircuits = v; break;
+                        case "ManifoldPipeTypeName": s.ManifoldPipeTypeName = v; break;
                     }
                 }
             }
@@ -66,7 +90,16 @@ namespace SayRevit.Addin
                     "DefaultElevationMm=" + DefaultElevationMm.ToString(CultureInfo.InvariantCulture),
                     "StartMode=" + StartMode,
                     "UsePickedZ=" + (UsePickedZ ? "true" : "false"),
-                    "LastText=" + (LastText ?? string.Empty).Replace("\r", string.Empty).Replace("\n", "\\n")
+                    "LastText=" + (LastText ?? string.Empty).Replace("\r", string.Empty).Replace("\n", "\\n"),
+                    "PipeTypeName=" + (PipeTypeName ?? string.Empty),
+                    "ManifoldMode=" + (ManifoldMode ? "true" : "false"),
+                    "ManifoldHeaderDnMm=" + ManifoldHeaderDnMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldSpacingMm=" + ManifoldSpacingMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldCircuitLengthMm=" + ManifoldCircuitLengthMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldHeaderDirection=" + ManifoldHeaderDirection,
+                    "ManifoldCircuitDirection=" + ManifoldCircuitDirection,
+                    "ManifoldCircuits=" + (ManifoldCircuits ?? string.Empty),
+                    "ManifoldPipeTypeName=" + (ManifoldPipeTypeName ?? string.Empty)
                 };
                 File.WriteAllLines(FilePath, lines);
             }

@@ -39,6 +39,7 @@ namespace SayRevit.Core.Parsing
                     sb.Append("   - ").Append(b.Count).Append(b.Count == 1 ? " stacco " : " stacchi ").Append(b.Size);
                     sb.Append(", lunghezza ").Append(Len(b.LengthMm));
                     sb.Append(", direzione ").Append(DirName(b.Direction, true, r.Kind));
+                    if (!b.Connect) sb.Append(b.Count == 1 ? ", non raccordato (sovrapposto)" : ", non raccordati (sovrapposti)");
                     if (b.PositionsMm.Count > 0)
                     {
                         sb.Append(", a ");

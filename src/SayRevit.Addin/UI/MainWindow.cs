@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -13,11 +14,18 @@ namespace SayRevit.Addin.UI
     /// <summary>Finestra principale (WPF costruita da codice, nessun XAML): testo → anteprima → creazione.</summary>
     public sealed class MainWindow : Window
     {
+        private const string AutoPipeType = "Automatico (dal testo o predefinito del progetto)";
+
         private readonly ModelCatalog _catalog;
         private readonly Settings _settings;
 
         private readonly TextBox _input = new TextBox();
+        private readonly CheckBox _manifoldFlag = new CheckBox();
+        private readonly ManifoldPanel _manifoldPanel;
+        private readonly StackPanel _textPanel = new StackPanel();
+        private readonly TextBlock _title = new TextBlock();
         private readonly ComboBox _parserMode = new ComboBox();
+        private readonly ComboBox _pipeType = new ComboBox();
         private readonly ComboBox _level = new ComboBox();
         private readonly TextBox _elevation = new TextBox();
         private readonly ComboBox _startMode = new ComboBox();
@@ -28,18 +36,31 @@ namespace SayRevit.Addin.UI
         private readonly Button _interpret = new Button();
         private readonly Button _create = new Button();
 
+        private UIElement _parserOption;
+        private UIElement _claudeOption;
+        private UIElement _pipeTypeOption;
         private CancellationTokenSource _cts;
         private string _previewedText;
+
+        /// <summary>True quando è attivo il flag "Collettore" (modalità parametrica, senza testo).</summary>
+        public bool ManifoldMode => _manifoldFlag.IsChecked == true;
 
         /// <summary>Risultato dell'interpretazione confermato con "Crea".</summary>
         public ParseResult Result { get; private set; }
 
         public string SelectedLevel => _level.SelectedItem as string;
 
+        /// <summary>
+        /// Tipo di tubazione scelto per la modalità testuale; null con "Automatico".
+        /// La sezione collettore ha una propria scelta, deterministica, che ha la precedenza.
+        /// </summary>
+        public string SelectedPipeType => _pipeType.SelectedIndex <= 0 ? null : _pipeType.SelectedItem as string;
+
         public MainWindow(ModelCatalog catalog, Settings settings)
         {
             _catalog = catalog;
             _settings = settings;
+            _manifoldPanel = new ManifoldPanel(catalog);
 
             Title = "sayRevit – tubazioni e canali da testo";
             Width = 760;
@@ -52,7 +73,18 @@ namespace SayRevit.Addin.UI
 
             Content = BuildLayout();
             LoadSettings();
-            Loaded += (s, e) => { _input.Focus(); _input.SelectAll(); };
+            Loaded += (s, e) =>
+            {
+                if (ManifoldMode)
+                {
+                    _manifoldPanel.FocusFirstEmpty();
+                }
+                else
+                {
+                    _input.Focus();
+                    _input.SelectAll();
+                }
+            };
         }
 
         // ------------------------------------------------------------------ UI
@@ -60,23 +92,43 @@ namespace SayRevit.Addin.UI
         private UIElement BuildLayout()
         {
             var root = new Grid { Margin = new Thickness(12) };
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(110) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 0 intestazione + flag
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 1 contenuto della modalità
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 2 opzioni comuni
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 3 pulsanti
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });  // 4 anteprima
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });                       // 5 stato
 
-            var title = new TextBlock
-            {
-                Text = "Descrivi cosa creare (solo tubazioni e canali):",
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 4)
-            };
-            Grid.SetRow(title, 0);
-            root.Children.Add(title);
+            var header = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
 
+            _manifoldFlag.Content = "Collettore";
+            _manifoldFlag.FontWeight = FontWeights.SemiBold;
+            _manifoldFlag.VerticalAlignment = VerticalAlignment.Center;
+            _manifoldFlag.ToolTip = "Modalità parametrica: niente testo, si inseriscono i circuiti indicandone il DN.";
+            _manifoldFlag.Checked += (s, e) => ApplyMode();
+            _manifoldFlag.Unchecked += (s, e) => ApplyMode();
+            DockPanel.SetDock(_manifoldFlag, Dock.Right);
+            header.Children.Add(_manifoldFlag);
+
+            _title.Text = "Descrivi cosa creare (solo tubazioni e canali):";
+            _title.FontWeight = FontWeights.SemiBold;
+            _title.VerticalAlignment = VerticalAlignment.Center;
+            header.Children.Add(_title);
+
+            Grid.SetRow(header, 0);
+            root.Children.Add(header);
+
+            var modeContent = new Grid();
+            Grid.SetRow(modeContent, 1);
+            root.Children.Add(modeContent);
+
+            _manifoldPanel.Changed += (s, e) => UpdateManifoldPreview();
+            _manifoldPanel.Visibility = Visibility.Collapsed;
+            modeContent.Children.Add(_manifoldPanel);
+
+            modeContent.Children.Add(_textPanel);
+
+            _input.Height = 110;
             _input.AcceptsReturn = true;
             _input.TextWrapping = TextWrapping.Wrap;
             _input.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
@@ -92,14 +144,13 @@ namespace SayRevit.Addin.UI
             };
             _input.TextChanged += (s, e) =>
             {
-                if (_previewedText != null && _input.Text != _previewedText)
+                if (!ManifoldMode && _previewedText != null && _input.Text != _previewedText)
                 {
                     _create.IsEnabled = false;
                     SetStatus("Testo modificato: premi \"Interpreta\" per aggiornare l'anteprima.", false);
                 }
             };
-            Grid.SetRow(_input, 1);
-            root.Children.Add(_input);
+            _textPanel.Children.Add(_input);
 
             var examples = new TextBlock
             {
@@ -109,17 +160,25 @@ namespace SayRevit.Addin.UI
                 Text = "Esempi: \"una tubazione DN200 con degli stacchi DN15\" · \"tubo in acciaio DN80 acqua fredda lungo 6 m con 4 stacchi DN20 ogni 1,5 m verso l'alto\" · " +
                        "\"canale 400x200 aria di mandata lungo 8 m con 2 stacchi 200x200 laterali\" · \"tubazione DN65 lunga 5 m; poi verso l'alto per 2 m\""
             };
-            Grid.SetRow(examples, 2);
-            root.Children.Add(examples);
+            _textPanel.Children.Add(examples);
 
             var options = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
-            options.Children.Add(Labeled("Interprete:", _parserMode, 150));
+            _parserOption = Labeled("Interprete:", _parserMode, 150);
+            options.Children.Add(_parserOption);
             _parserMode.Items.Add("Regole (offline)");
             _parserMode.Items.Add("Claude (AI)");
             _parserMode.SelectionChanged += (s, e) => _claudeModel.IsEnabled = _parserMode.SelectedIndex == 1;
 
-            options.Children.Add(Labeled("Modello Claude:", _claudeModel, 150));
+            _claudeOption = Labeled("Modello Claude:", _claudeModel, 150);
+            options.Children.Add(_claudeOption);
             _claudeModel.ToolTip = "Richiede la variabile d'ambiente ANTHROPIC_API_KEY (oppure l'accesso configurato con l'SDK Anthropic).";
+
+            _pipeTypeOption = Labeled("Tipo tubazione:", _pipeType, 250);
+            options.Children.Add(_pipeTypeOption);
+            _pipeType.Items.Add(AutoPipeType);
+            foreach (var t in _catalog.PipeTypes) _pipeType.Items.Add(t.Name);
+            _pipeType.SelectedIndex = 0;
+            _pipeType.SelectionChanged += (s, e) => UpdatePipeTypeTooltip();
 
             options.Children.Add(Labeled("Livello:", _level, 160));
             foreach (var l in _catalog.Levels) _level.Items.Add(l);
@@ -140,7 +199,7 @@ namespace SayRevit.Addin.UI
             _usePickedZ.Margin = new Thickness(0, 6, 12, 0);
             options.Children.Add(_usePickedZ);
 
-            Grid.SetRow(options, 3);
+            Grid.SetRow(options, 2);
             root.Children.Add(options);
 
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
@@ -170,7 +229,7 @@ namespace SayRevit.Addin.UI
                        _catalog.PipingSystems.Count + "+" + _catalog.DuctSystems.Count + " sistemi, " + _catalog.Levels.Count + " livelli"
             };
             buttons.Children.Add(catalogInfo);
-            Grid.SetRow(buttons, 4);
+            Grid.SetRow(buttons, 3);
             root.Children.Add(buttons);
 
             _preview.IsReadOnly = true;
@@ -180,15 +239,87 @@ namespace SayRevit.Addin.UI
             _preview.Padding = new Thickness(6);
             _preview.Background = new SolidColorBrush(Color.FromRgb(0xF7, 0xF7, 0xF7));
             _preview.Text = "L'anteprima di ciò che verrà creato comparirà qui.";
-            Grid.SetRow(_preview, 5);
+            Grid.SetRow(_preview, 4);
             root.Children.Add(_preview);
 
             _status.Margin = new Thickness(0, 6, 0, 0);
             _status.TextWrapping = TextWrapping.Wrap;
-            Grid.SetRow(_status, 6);
+            Grid.SetRow(_status, 5);
             root.Children.Add(_status);
 
             return root;
+        }
+
+        /// <summary>Mostra i controlli della modalità attiva (testuale o collettore parametrico).</summary>
+        private void ApplyMode()
+        {
+            var manifold = ManifoldMode;
+            _textPanel.Visibility = manifold ? Visibility.Collapsed : Visibility.Visible;
+            _manifoldPanel.Visibility = manifold ? Visibility.Visible : Visibility.Collapsed;
+            _interpret.Visibility = manifold ? Visibility.Collapsed : Visibility.Visible;
+            if (_parserOption != null) _parserOption.Visibility = manifold ? Visibility.Collapsed : Visibility.Visible;
+            if (_claudeOption != null) _claudeOption.Visibility = manifold ? Visibility.Collapsed : Visibility.Visible;
+            if (_pipeTypeOption != null) _pipeTypeOption.Visibility = manifold ? Visibility.Collapsed : Visibility.Visible;
+
+            _title.Text = manifold
+                ? "Collettore parametrico: aggiungi i circuiti e indica il DN di ciascuno."
+                : "Descrivi cosa creare (solo tubazioni e canali):";
+            Title = manifold ? "sayRevit – collettore parametrico" : "sayRevit – tubazioni e canali da testo";
+
+            if (manifold)
+            {
+                UpdateManifoldPreview();
+            }
+            else
+            {
+                Result = null;
+                _previewedText = null;
+                _create.IsEnabled = false;
+                _preview.Text = "L'anteprima di ciò che verrà creato comparirà qui.";
+                SetStatus(string.Empty, false);
+            }
+        }
+
+        private void UpdatePipeTypeTooltip()
+        {
+            var name = SelectedPipeType;
+            var type = name == null ? null : _catalog.PipeTypes.FirstOrDefault(t => t.Name == name);
+            if (type == null)
+            {
+                _pipeType.ToolTip = "Tipo usato quando la descrizione non ne indica uno. " +
+                                    "\"Automatico\" lascia decidere al testo e, in mancanza, al tipo predefinito del progetto.";
+                return;
+            }
+            var sizes = type.AvailableDiametersMm.Count > 0
+                ? "misure disponibili DN " + string.Join(", ", type.AvailableDiametersMm.Select(MepSize.Fmt))
+                : "nessuna misura leggibile dalle preferenze di instradamento";
+            _pipeType.ToolTip = "Tipo \"" + type.Name + "\": " + sizes +
+                                (type.HasTees ? " · raccordi a T configurati" : " · nessun raccordo a T configurato");
+        }
+
+        /// <summary>Ricalcola il collettore a ogni modifica dei campi: l'anteprima è sempre allineata.</summary>
+        private void UpdateManifoldPreview()
+        {
+            if (!ManifoldMode) return;
+            var plan = _manifoldPanel.BuildPlan();
+            var result = plan.ToParseResult();
+            Result = result;
+
+            var typeInfo = _manifoldPanel.DescribeSelectedType();
+            if (typeInfo != null) result.Notes.Add(typeInfo);
+
+            if (result.Success)
+            {
+                _preview.Text = plan.Summary() + Environment.NewLine + PlanFormatter.Describe(result);
+                _create.IsEnabled = true;
+                SetStatus("Anteprima pronta. Controlla e premi \"Crea in Revit\".", false);
+            }
+            else
+            {
+                _preview.Text = plan.Summary();
+                _create.IsEnabled = false;
+                SetStatus(result.Error, true);
+            }
         }
 
         private static UIElement Labeled(string label, FrameworkElement control, double width)
@@ -213,6 +344,14 @@ namespace SayRevit.Addin.UI
             _usePickedZ.IsChecked = _settings.UsePickedZ;
             _usePickedZ.IsEnabled = _startMode.SelectedIndex == 1;
             _input.Text = string.IsNullOrWhiteSpace(_settings.LastText) ? "una tubazione DN200 lunga 10 m con 3 stacchi DN15" : _settings.LastText;
+
+            var storedType = _pipeType.Items.IndexOf(_settings.PipeTypeName);
+            _pipeType.SelectedIndex = storedType > 0 ? storedType : 0;
+            UpdatePipeTypeTooltip();
+
+            _manifoldPanel.LoadSettings(_settings);
+            _manifoldFlag.IsChecked = _settings.ManifoldMode;
+            ApplyMode(); // anche quando il flag non cambia stato rispetto al valore iniziale
         }
 
         private void StoreSettings()
@@ -224,6 +363,9 @@ namespace SayRevit.Addin.UI
             _settings.StartMode = _startMode.SelectedIndex == 1 ? "pick" : "origin";
             _settings.UsePickedZ = _usePickedZ.IsChecked == true;
             _settings.LastText = _input.Text;
+            _settings.PipeTypeName = SelectedPipeType ?? string.Empty;
+            _settings.ManifoldMode = ManifoldMode;
+            _manifoldPanel.StoreSettings(_settings);
         }
 
         // -------------------------------------------------------------- actions
@@ -297,7 +439,12 @@ namespace SayRevit.Addin.UI
 
         private async void Confirm()
         {
-            if (Result == null || !Result.Success || _previewedText != _input.Text)
+            if (ManifoldMode)
+            {
+                UpdateManifoldPreview();
+                if (Result == null || !Result.Success) return;
+            }
+            else if (Result == null || !Result.Success || _previewedText != _input.Text)
             {
                 var ok = await InterpretAsync();
                 if (!ok) return;
@@ -309,6 +456,7 @@ namespace SayRevit.Addin.UI
 
         private void SetBusy(bool busy)
         {
+            if (ManifoldMode) return; // la modalità parametrica non ha attese asincrone
             _interpret.IsEnabled = !busy;
             _create.IsEnabled = !busy && Result != null && Result.Success && _previewedText == _input.Text;
             _input.IsEnabled = !busy;

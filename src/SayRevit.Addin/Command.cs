@@ -52,7 +52,8 @@ namespace SayRevit.Addin
             {
                 DefaultElevationMm = settings.DefaultElevationMm,
                 LevelName = window.SelectedLevel,
-                UsePickedZ = settings.UsePickedZ
+                UsePickedZ = settings.UsePickedZ,
+                PipeTypeName = window.SelectedPipeType
             };
 
             if (settings.StartMode == "pick")

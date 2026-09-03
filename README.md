@@ -48,7 +48,13 @@ Ambito: **solo MEP – tubazioni (pipes) e canali (ducts)**.
 
 - **Tipo**: nome esplicito (`tipo "Acciaio zincato"`), altrimenti parole chiave sul materiale
   (acciaio, zincato, inox, rame, PVC, PPR, PEAD, multistrato, ghisa, lamiera…) cercate nei nomi
-  dei tipi; altrimenti il tipo predefinito del progetto, altrimenti il primo con segmenti definiti.
+  dei tipi; altrimenti il **tipo scelto nella tendina "Tipo tubazione"** della finestra;
+  altrimenti il tipo predefinito del progetto, altrimenti il primo con segmenti definiti.
+  La tendina elenca tutti i `PipeType` caricati nel progetto (es. *Ghisa REI*, *RM Inoxpres 316*,
+  *Multistrato stabil PEX-a*…) più la voce *Automatico*, che lascia decidere al testo. Il nome
+  scelto viene confrontato in modo **esatto**, perché i nomi si assomigliano molto. Il suggerimento
+  del controllo mostra le misure disponibili per quel tipo e se ha raccordi a T configurati.
+  La sezione Collettore ha una **propria** tendina, senza *Automatico*: lì la scelta è vincolante.
 - **Misure**: il diametro richiesto viene confrontato con i diametri del tipo (segmenti delle
   preferenze di instradamento per le tubazioni, impostazioni dimensioni canali per i canali
   circolari); se non esiste si usa la misura più vicina e si avvisa.
@@ -80,6 +86,42 @@ Ambito: **solo MEP – tubazioni (pipes) e canali (ducts)**.
 
 Valori predefiniti: lunghezza tratto 3 m, lunghezza stacco 500 mm, direzione tratto +X,
 direzione stacchi verso l'alto (tubazioni) o laterale (canali), stacchi distribuiti uniformemente.
+
+## Modalità Collettore (parametrica)
+
+Il flag **Collettore** in alto a destra nella finestra sostituisce il campo testuale con una
+scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa sezione è
+**puramente deterministica** — nessun valore viene dedotto o interpretato.
+
+- **Materiale / tipo tubazione**: tendina in cima alla scheda con i `PipeType` del progetto.
+  Non c'è la voce *Automatico*: il tipo mostrato è esattamente quello che verrà usato, e il
+  nome viene risolto per corrispondenza esatta. Accanto compare il numero di misure disponibili,
+  con l'elenco completo nel suggerimento e nell'anteprima.
+- **Circuiti**: si inserisce un circuito per volta indicandone il **DN**. Il pulsante **+**
+  aggiunge una riga (lo fa anche **Invio** dal campo DN); **✕** la rimuove. Le righe si
+  numerano da sole `C1`, `C2`, … e quelle lasciate vuote vengono ignorate.
+- **DN collettore**: con *automatico* attivo è calcolato per equivalenza di area
+  (√Σdn²) e arrotondato al DN commerciale superiore, così il collettore non è mai più
+  piccolo della somma delle sezioni derivate; togliendo la spunta lo si impone a mano.
+- **Interasse**: distanza tra due circuiti consecutivi. Il collettore si estende di mezzo
+  interasse oltre il primo e l'ultimo circuito.
+- **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
+  (basso, alto, sinistra, destra, alternati).
+A differenza della modalità testuale, **i circuiti non vengono raccordati**: il collettore
+resta un tubo unico (nessun `BreakCurve`) e ogni circuito parte dall'asse del collettore,
+semplicemente sovrapposto. Un raccordo a T di Revit spezzerebbe il collettore e
+ridimensionerebbe l'innesto alla misura del circuito.
+
+L'anteprima riporta le misure disponibili per il tipo scelto, così si vede subito se i DN
+inseriti esistono (in caso contrario la creazione usa la misura più vicina e lo segnala).
+L'anteprima si aggiorna a ogni modifica; livello, quota e punto iniziale restano quelli
+della finestra. Il collettore viene tradotto in un `MepPlan` (un tratto principale con un
+gruppo di stacchi per circuito, in posizione esplicita e con `Connect = false`) e creato
+dallo stesso `RevitPlanBuilder` della modalità testuale.
+
+Valori predefiniti: interasse 150 mm, lunghezza circuiti 500 mm, collettore lungo +X,
+circuiti verso il basso. Le impostazioni e l'elenco dei DN vengono ricordati tra una
+sessione e l'altra.
 
 ## Requisiti e installazione
 
@@ -128,14 +170,14 @@ caricata solo quando si seleziona questa modalità: senza chiave si lavora norma
 
 ```
 sayRevit.sln
-src/SayRevit.Core     modello (MepPlan), parser a regole IT/EN, formattatore anteprima  [netstandard2.0, nessuna dipendenza]
+src/SayRevit.Core     modello (MepPlan, ManifoldPlan), parser a regole IT/EN, formattatore anteprima [netstandard2.0, nessuna dipendenza]
 src/SayRevit.Claude   parser Claude con output strutturati                            [netstandard2.0, SDK Anthropic]
 src/SayRevit.Addin    add-in Revit: ribbon, finestra WPF, lettura catalogo, costruzione elementi [net48 / net8.0-windows / net10.0-windows]
 tests/                test xunit del parser e della conversione JSON
 scripts/              install.ps1 / uninstall.ps1
 ```
 
-Test: `dotnet test` (32 test, eseguibili su qualsiasi sistema operativo).
+Test: `dotnet test` (53 test, eseguibili su qualsiasi sistema operativo).
 
 ## Limitazioni e note
 
