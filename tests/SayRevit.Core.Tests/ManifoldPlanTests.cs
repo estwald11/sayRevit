@@ -247,7 +247,7 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void Ritorno_CloneSpeculareInterlacciato()
+        public void Ritorno_BaseAllineataStacchiInterlacciati()
         {
             var p = PlanWithReturn(20, 16, 25);
             p.SpacingMm = 150;
@@ -264,30 +264,37 @@ namespace SayRevit.Core.Tests
             Assert.Equal(supply.Direction, ret.Direction);
             Assert.False(ret.ContinuesPrevious);
 
-            // chirale: circuiti in ordine inverso
-            Assert.Equal(new double[] { 25, 16, 20 }, ret.Branches.Select(b => b.Size.DiameterMm).ToArray());
-            Assert.All(ret.Branches, b => Assert.False(b.Connect));
-
-            // asse parallelo a destra della mandata
+            // basi perfettamente allineate: nessuna traslazione lungo l'asse, solo laterale
+            Assert.Equal(0, ret.OffsetAlongMm);
             Assert.Equal(-300, ret.OffsetSideMm);
 
+            // stacchi identici (stessi DN, stesso ordine), solo riposizionati
+            Assert.Equal(new double[] { 20, 16, 25 }, ret.Branches.Select(b => b.Size.DiameterMm).ToArray());
+            Assert.All(ret.Branches, b => Assert.False(b.Connect));
+
             // ogni circuito di ritorno a metà tra due di mandata:
-            // mandata globale: 60, 210, 360  →  metà: 135, 285 (e 435 oltre l'ultimo)
+            // mandata: 60, 210, 360 → ritorno: 135, 285, 435 (le basi condividono l'origine)
             var supplyX = supply.Branches.Select(b => b.PositionsMm[0]).ToArray();
-            var returnX = ret.Branches.Select(b => b.PositionsMm[0] + ret.OffsetAlongMm.Value).ToArray();
-            Assert.Equal(supplyX[0] + 75, returnX[0], 6);   // (60+210)/2 = 135
+            var returnX = ret.Branches.Select(b => b.PositionsMm[0]).ToArray();
             Assert.Equal((supplyX[0] + supplyX[1]) / 2, returnX[0], 6);
             Assert.Equal((supplyX[1] + supplyX[2]) / 2, returnX[1], 6);
             Assert.Equal(supplyX[2] + 75, returnX[2], 6);
         }
 
         [Fact]
-        public void Ritorno_ConDnUgualiELoSfasamentoEMezzoInterasse()
+        public void Ritorno_UltimoStaccoOltreLaBase_Avvisa()
         {
-            var p = PlanWithReturn(20, 20, 20, 20);
-            p.SpacingMm = 200;
-            var ret = p.ToParseResult().Plan.Runs[1];
-            Assert.Equal(100, ret.OffsetAlongMm); // (20-20)/2 + 200/2
+            // sporgenza 50 + DN/2 10 = 60 < interasse/2 = 75: l'ultimo ritorno esce di 15 mm
+            var p = PlanWithReturn(20, 20, 20);
+            p.SpacingMm = 150;
+            var r = p.ToParseResult();
+            Assert.Contains(r.Warnings, w => w.Contains("oltre la fine della base"));
+
+            // con sporgenza ≥ mezzo interasse non deve avvisare
+            var ok = PlanWithReturn(20, 20, 20);
+            ok.SpacingMm = 150;
+            ok.OverhangMm = 80; // 80 + 10 = 90 ≥ 75
+            Assert.DoesNotContain(ok.ToParseResult().Warnings, w => w.Contains("oltre la fine della base"));
         }
 
         [Fact]

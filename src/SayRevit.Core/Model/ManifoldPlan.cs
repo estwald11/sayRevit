@@ -198,14 +198,16 @@ namespace SayRevit.Core.Model
 
             var plan = new MepPlan { SourceText = Summary() };
             plan.Runs.Add(run);
-            if (WithReturn) plan.Runs.Add(MakeReturnRun(headerDn, circuits));
 
             var result = new ParseResult { Success = true, Plan = plan };
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
             if (WithReturn)
-                result.Notes.Add("Collettore di ritorno: clone speculare (circuiti in ordine inverso) a " +
-                                 MepSize.Fmt(ReturnOffsetMm) + " mm dalla mandata, sfasato di mezzo interasse: " +
-                                 "ogni circuito di ritorno cade a metà tra due di mandata.");
+            {
+                plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions, result));
+                result.Notes.Add("Collettore di ritorno: base identica e perfettamente allineata alla mandata, a " +
+                                 MepSize.Fmt(ReturnOffsetMm) + " mm; solo gli stacchi sono spostati di mezzo interasse, " +
+                                 "ognuno a metà tra due di mandata.");
+            }
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
             {
                 var computed = MepSize.Fmt(ComputedHeaderDnMm);
@@ -282,28 +284,29 @@ namespace SayRevit.Core.Model
         }
 
         /// <summary>
-        /// Collettore di ritorno: clone speculare (circuiti in ordine inverso, stessa base) su un asse
-        /// parallelo a <see cref="ReturnOffsetMm"/>, sfasato lungo l'asse in modo che ogni circuito di
-        /// ritorno cada a metà strada tra due circuiti di mandata (clone perfetto ma chirale).
-        /// La lunghezza della base non cambia: le sporgenze si scambiano semplicemente di estremità.
+        /// Collettore di ritorno: base IDENTICA e perfettamente allineata alla mandata (nessuna
+        /// traslazione lungo l'asse), su un asse parallelo a <see cref="ReturnOffsetMm"/>.
+        /// Solo gli stacchi vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo
+        /// interasse, così ogni circuito di ritorno cade a metà tra due circuiti di mandata e resta
+        /// accanto al proprio circuito di andata.
         /// </summary>
-        private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits)
+        private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits, List<double> supplyPositions, ParseResult result)
         {
             var ret = MakeHeaderRun(headerDn);
 
-            var reversed = new List<ManifoldCircuit>(circuits);
-            reversed.Reverse();
+            var shift = SpacingMm / 2.0;
+            for (var i = 0; i < circuits.Count; i++)
+                ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i] + shift));
 
-            // Posizioni locali del clone speculare: stessa regola della mandata, su lista invertita.
-            var start = OverhangMm + reversed[0].DnMm / 2.0;
-            for (var j = 0; j < reversed.Count; j++)
-                ret.Branches.Add(MakeCircuitBranch(reversed[j].DnMm, j, start + j * SpacingMm));
+            // Con le basi allineate l'ultimo stacco di ritorno può cadere oltre la fine della base
+            // (succede quando sporgenza + DNₙ/2 < interasse/2): meglio dirlo che scoprirlo nel modello.
+            var overshoot = supplyPositions[supplyPositions.Count - 1] + shift - HeaderLengthMm;
+            if (overshoot > 0.001)
+                result.Warnings.Add("L'ultimo circuito di ritorno cade " + MepSize.Fmt(overshoot) +
+                                    " mm oltre la fine della base (sporgenza " + MepSize.Fmt(OverhangMm) +
+                                    " mm < mezzo interasse).");
 
-            // Sfasamento lungo l'asse: il primo circuito di ritorno deve cadere a metà tra
-            // il primo e il secondo di mandata → (dn₁ - dnₙ)/2 + interasse/2.
-            var first = circuits[0].DnMm;
-            var last = circuits[circuits.Count - 1].DnMm;
-            ret.OffsetAlongMm = (first - last) / 2.0 + SpacingMm / 2.0;
+            ret.OffsetAlongMm = 0;              // basi perfettamente allineate
             ret.OffsetSideMm = -ReturnOffsetMm; // alla destra della direzione della mandata
             return ret;
         }
@@ -322,8 +325,8 @@ namespace SayRevit.Core.Model
             sb.Append(", interasse ").Append(MepSize.Fmt(SpacingMm)).Append(" mm.");
             sb.AppendLine();
             if (WithReturn)
-                sb.Append("Ritorno: clone speculare a ").Append(MepSize.Fmt(ReturnOffsetMm))
-                  .Append(" mm, sfasato di ").Append(MepSize.Fmt(SpacingMm / 2.0)).Append(" mm.").AppendLine();
+                sb.Append("Ritorno: base allineata a ").Append(MepSize.Fmt(ReturnOffsetMm))
+                  .Append(" mm, stacchi spostati di ").Append(MepSize.Fmt(SpacingMm / 2.0)).Append(" mm.").AppendLine();
             sb.Append("Tipo tubazione: ")
               .Append(string.IsNullOrWhiteSpace(PipeTypeName) ? "predefinito del progetto" : "\"" + PipeTypeName.Trim() + "\"")
               .AppendLine();

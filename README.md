@@ -112,11 +112,12 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   diversi le due sporgenze d'asse sono diverse.
 - **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
   (basso, alto, sinistra, destra, alternati).
-- **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno, un clone
-  perfetto ma **chirale** della mandata: stessa base (stesso DN e stessa lunghezza), circuiti
-  identici in ordine inverso, su un asse parallelo alla **distanza mandata/ritorno** indicata,
-  sfasato di mezzo interasse così che ogni circuito di ritorno cada a metà tra due circuiti
-  di mandata.
+- **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno: base
+  **identica e perfettamente allineata** alla mandata (stesso DN, stessa lunghezza, stessi
+  estremi) su un asse parallelo alla **distanza mandata/ritorno** indicata. Solo gli stacchi
+  vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo interasse, così
+  ogni circuito di ritorno cade a metà tra due circuiti di mandata. Se la sporgenza è minore
+  di mezzo interasse l'ultimo stacco di ritorno esce dalla base e l'anteprima lo segnala.
 
 A differenza della modalità testuale, **i circuiti non vengono raccordati**: il collettore
 resta un tubo unico (nessun `BreakCurve`) e ogni circuito parte dall'asse del collettore,
