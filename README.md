@@ -109,15 +109,18 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   L'anteprima mostra formula, DN scelto e Øint. Togliendo la spunta lo si impone a mano.
 - **Interasse**: distanza tra due circuiti consecutivi. La base sporge di **5 cm oltre il
   bordo** del primo e dell'ultimo circuito (bordo = asse ± DN/2), quindi con DN d'estremità
-  diversi le due sporgenze d'asse sono diverse.
+  diversi le due sporgenze d'asse sono diverse. Con il ritorno attivo il vincolo dei 5 cm
+  vale sul **primo stacco della mandata** e sull'**ultimo stacco del ritorno** (mezzo
+  interasse più avanti): entrambe le basi, identiche e allineate, si allungano di s/2 e
+  nessuno stacco cade mai fuori dalla base.
 - **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
   (basso, alto, sinistra, destra, alternati).
 - **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno: base
   **identica e perfettamente allineata** alla mandata (stesso DN, stessa lunghezza, stessi
   estremi) su un asse parallelo alla **distanza mandata/ritorno** indicata. Solo gli stacchi
   vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo interasse, così
-  ogni circuito di ritorno cade a metà tra due circuiti di mandata. Se la sporgenza è minore
-  di mezzo interasse l'ultimo stacco di ritorno esce dalla base e l'anteprima lo segnala.
+  ogni circuito di ritorno cade a metà tra due circuiti di mandata, e tutti gli stacchi
+  della mandata vengono sempre replicati sul ritorno.
 
 - **Fondelli (Enddeckel)**: alle quattro estremità delle basi (mandata e ritorno) vengono
   posizionati automaticamente dei fondelli, orientati, dimensionati e collegati al tubo.

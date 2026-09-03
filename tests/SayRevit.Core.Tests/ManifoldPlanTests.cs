@@ -292,19 +292,42 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void Ritorno_UltimoStaccoOltreLaBase_Avvisa()
+        public void ConRitorno_LeBasiSiAllunganoDiMezzoInterasse()
         {
-            // sporgenza 50 + DN/2 10 = 60 < interasse/2 = 75: l'ultimo ritorno esce di 15 mm
-            var p = PlanWithReturn(20, 20, 20);
+            // Il vincolo dei 5 cm vale sul PRIMO stacco della mandata e sull'ULTIMO del ritorno
+            // (mezzo interasse più avanti): le basi, identiche e allineate, si allungano di s/2.
+            var solo = Plan(20, 20, 20);
+            solo.SpacingMm = 150;
+            var doppio = PlanWithReturn(20, 20, 20);
+            doppio.SpacingMm = 150;
+            Assert.Equal(solo.HeaderLengthMm + 75, doppio.HeaderLengthMm);
+        }
+
+        [Fact]
+        public void ConRitorno_NessunoStaccoCadeFuoriDallaBase()
+        {
+            // Era il bug del troncamento: l'ultimo stacco di ritorno cadeva oltre la fine
+            // della base e il builder lo scartava, lasciando il ritorno con uno stacco in meno.
+            var p = PlanWithReturn(20, 16, 25, 20);
             p.SpacingMm = 150;
             var r = p.ToParseResult();
-            Assert.Contains(r.Warnings, w => w.Contains("oltre la fine della base"));
+            var supply = r.Plan.Runs[0];
+            var ret = r.Plan.Runs[1];
 
-            // con sporgenza ≥ mezzo interasse non deve avvisare
-            var ok = PlanWithReturn(20, 20, 20);
-            ok.SpacingMm = 150;
-            ok.OverhangMm = 80; // 80 + 10 = 90 ≥ 75
-            Assert.DoesNotContain(ok.ToParseResult().Warnings, w => w.Contains("oltre la fine della base"));
+            Assert.Equal(supply.Branches.Count, ret.Branches.Count); // TUTTI replicati
+            foreach (var run in r.Plan.Runs)
+            {
+                foreach (var b in run.Branches)
+                {
+                    Assert.InRange(b.PositionsMm[0], 1, run.LengthMm - 1);
+                }
+            }
+            // 5 cm esatti: dal bordo del primo di mandata all'inizio base...
+            Assert.Equal(50, supply.Branches[0].PositionsMm[0] - 20 / 2.0);
+            // ...e dal bordo dell'ultimo di ritorno alla fine base
+            var lastReturn = ret.Branches[ret.Branches.Count - 1];
+            Assert.Equal(50, ret.LengthMm - lastReturn.PositionsMm[0] - 20 / 2.0, 6);
+            Assert.DoesNotContain(r.Warnings, w => w.Contains("oltre la fine della base"));
         }
 
         [Fact]

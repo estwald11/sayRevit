@@ -139,7 +139,9 @@ namespace SayRevit.Core.Model
 
         /// <summary>
         /// La base parte 5 cm (OverhangMm) prima del bordo del primo circuito e finisce 5 cm dopo
-        /// il bordo dell'ultimo; il bordo è posizione ± DN/2.
+        /// il bordo dell'ultimo (bordo = posizione ± DN/2). Con il ritorno attivo gli stacchi che
+        /// governano gli estremi sono il PRIMO della mandata e l'ULTIMO del ritorno (che sta mezzo
+        /// interasse più avanti): entrambe le basi, identiche e allineate, si allungano di s/2.
         /// </summary>
         public double HeaderLengthMm
         {
@@ -149,7 +151,9 @@ namespace SayRevit.Core.Model
                 if (circuits.Count == 0) return 0;
                 var first = circuits[0].DnMm / 2.0;
                 var last = circuits[circuits.Count - 1].DnMm / 2.0;
-                return OverhangMm + first + (circuits.Count - 1) * SpacingMm + last + OverhangMm;
+                var length = OverhangMm + first + (circuits.Count - 1) * SpacingMm + last + OverhangMm;
+                if (WithReturn) length += SpacingMm / 2.0;
+                return length;
             }
         }
 
@@ -205,9 +209,9 @@ namespace SayRevit.Core.Model
                              "per gli altri materiali le estremità restano aperte.");
             if (WithReturn)
             {
-                plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions, result));
+                plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions));
                 result.Notes.Add("Collettore di ritorno: base identica e perfettamente allineata alla mandata, a " +
-                                 MepSize.Fmt(ReturnOffsetMm) + " mm; solo gli stacchi sono spostati di mezzo interasse, " +
+                                 MepSize.Fmt(ReturnOffsetMm) + " mm; stacchi replicati e spostati di mezzo interasse, " +
                                  "ognuno a metà tra due di mandata.");
             }
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
@@ -232,8 +236,11 @@ namespace SayRevit.Core.Model
                                      " (serie commerciale: diametri interni del tipo non disponibili).");
                 }
             }
-            result.Notes.Add("Base lunga " + MepSize.Fmt(HeaderLengthMm) + " mm: sporge di " + MepSize.Fmt(OverhangMm) +
-                             " mm dal bordo del primo e dell'ultimo circuito.");
+            result.Notes.Add(WithReturn
+                ? "Basi lunghe " + MepSize.Fmt(HeaderLengthMm) + " mm: sporgono di " + MepSize.Fmt(OverhangMm) +
+                  " mm dal bordo del primo circuito di mandata e dell'ultimo circuito di ritorno."
+                : "Base lunga " + MepSize.Fmt(HeaderLengthMm) + " mm: sporge di " + MepSize.Fmt(OverhangMm) +
+                  " mm dal bordo del primo e dell'ultimo circuito.");
 
             var oversized = circuits
                 .Select((c, i) => new { c, i })
@@ -289,25 +296,18 @@ namespace SayRevit.Core.Model
         /// <summary>
         /// Collettore di ritorno: base IDENTICA e perfettamente allineata alla mandata (nessuna
         /// traslazione lungo l'asse), su un asse parallelo a <see cref="ReturnOffsetMm"/>.
-        /// Solo gli stacchi vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo
-        /// interasse, così ogni circuito di ritorno cade a metà tra due circuiti di mandata e resta
-        /// accanto al proprio circuito di andata.
+        /// TUTTI gli stacchi vengono replicati dalla mandata (stessi DN, stesso ordine) e spostati
+        /// di mezzo interasse; le basi, allungate di s/2 in <see cref="HeaderLengthMm"/>, rispettano
+        /// i 5 cm sul primo stacco della mandata e sull'ultimo del ritorno, quindi nessuno stacco
+        /// cade mai fuori dalla base.
         /// </summary>
-        private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits, List<double> supplyPositions, ParseResult result)
+        private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits, List<double> supplyPositions)
         {
             var ret = MakeHeaderRun(headerDn);
 
             var shift = SpacingMm / 2.0;
             for (var i = 0; i < circuits.Count; i++)
                 ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i] + shift));
-
-            // Con le basi allineate l'ultimo stacco di ritorno può cadere oltre la fine della base
-            // (succede quando sporgenza + DNₙ/2 < interasse/2): meglio dirlo che scoprirlo nel modello.
-            var overshoot = supplyPositions[supplyPositions.Count - 1] + shift - HeaderLengthMm;
-            if (overshoot > 0.001)
-                result.Warnings.Add("L'ultimo circuito di ritorno cade " + MepSize.Fmt(overshoot) +
-                                    " mm oltre la fine della base (sporgenza " + MepSize.Fmt(OverhangMm) +
-                                    " mm < mezzo interasse).");
 
             ret.OffsetAlongMm = 0;              // basi perfettamente allineate
             ret.OffsetSideMm = -ReturnOffsetMm; // alla destra della direzione della mandata
