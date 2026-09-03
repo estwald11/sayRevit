@@ -46,6 +46,8 @@ namespace SayRevit.Addin.UI
         private readonly TextBox _circuitLength = new TextBox();
         private readonly ComboBox _headerDirection = new ComboBox();
         private readonly ComboBox _circuitDirection = new ComboBox();
+        private readonly CheckBox _withReturn = new CheckBox();
+        private readonly TextBox _returnOffset = new TextBox();
 
         private bool _suspendChanged;
 
@@ -255,9 +257,23 @@ namespace SayRevit.Addin.UI
             _circuitDirection.SelectedIndex = 0;
             panel.Children.Add(Labeled("Partenza circuiti:", _circuitDirection, 130));
 
+            _withReturn.Content = "Collettore di ritorno";
+            _withReturn.IsChecked = true;
+            _withReturn.VerticalAlignment = VerticalAlignment.Center;
+            _withReturn.Margin = new Thickness(0, 0, 12, 6);
+            _withReturn.ToolTip = "Clone speculare della mandata su un asse parallelo, sfasato di mezzo interasse:\n" +
+                                  "ogni circuito di ritorno cade a metà tra due circuiti di mandata.";
+            _withReturn.Checked += (s, e) => { _returnOffset.IsEnabled = true; Notify(); };
+            _withReturn.Unchecked += (s, e) => { _returnOffset.IsEnabled = false; Notify(); };
+            panel.Children.Add(_withReturn);
+
+            panel.Children.Add(Labeled("Distanza mandata/ritorno (mm):", _returnOffset, 70));
+            _returnOffset.ToolTip = "Distanza tra l'asse del collettore di mandata e quello di ritorno.";
+
             _headerDn.TextChanged += (s, e) => Notify();
             _spacing.TextChanged += (s, e) => Notify();
             _circuitLength.TextChanged += (s, e) => Notify();
+            _returnOffset.TextChanged += (s, e) => Notify();
             _headerDirection.SelectionChanged += (s, e) => Notify();
             _circuitDirection.SelectionChanged += (s, e) => Notify();
 
@@ -412,7 +428,9 @@ namespace SayRevit.Addin.UI
                 CircuitLengthMm = ParseNumber(_circuitLength.Text, 500),
                 HeaderDirection = HeaderDirections[Math.Max(_headerDirection.SelectedIndex, 0)].Value,
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
-                PipeTypeName = _pipeType.SelectedItem as string
+                PipeTypeName = _pipeType.SelectedItem as string,
+                WithReturn = _withReturn.IsChecked == true,
+                ReturnOffsetMm = ParseNumber(_returnOffset.Text, 300)
             };
             var type = SelectedType;
             if (type != null) plan.HeaderSizeCandidates.AddRange(type.Sizes);
@@ -446,6 +464,10 @@ namespace SayRevit.Addin.UI
                 _headerDirection.SelectedIndex = Math.Max(0, IndexOf(HeaderDirections, settings.ManifoldHeaderDirection));
                 _circuitDirection.SelectedIndex = Math.Max(0, IndexOf(CircuitDirections, settings.ManifoldCircuitDirection));
 
+                _withReturn.IsChecked = settings.ManifoldWithReturn;
+                _returnOffset.IsEnabled = settings.ManifoldWithReturn;
+                _returnOffset.Text = settings.ManifoldReturnOffsetMm.ToString("0.##", CultureInfo.InvariantCulture);
+
                 var storedType = _pipeType.Items.IndexOf(settings.ManifoldPipeTypeName);
                 if (storedType >= 0) _pipeType.SelectedIndex = storedType;
                 UpdatePipeTypeTooltip();
@@ -472,6 +494,8 @@ namespace SayRevit.Addin.UI
             settings.ManifoldCircuitDirection = plan.CircuitDirection.ToString();
             settings.ManifoldCircuits = plan.CircuitsToString();
             settings.ManifoldPipeTypeName = plan.PipeTypeName ?? string.Empty;
+            settings.ManifoldWithReturn = plan.WithReturn;
+            settings.ManifoldReturnOffsetMm = plan.ReturnOffsetMm;
         }
 
         private static int IndexOf(KeyValuePair<string, DirectionKind>[] options, string name)

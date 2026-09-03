@@ -8,8 +8,15 @@ namespace SayRevit.Core.Tests
     {
         private static ManifoldPlan Plan(params double[] dns)
         {
-            var p = new ManifoldPlan();
+            var p = new ManifoldPlan { WithReturn = false }; // i test storici guardano la sola mandata
             foreach (var dn in dns) p.Circuits.Add(new ManifoldCircuit(dn));
+            return p;
+        }
+
+        private static ManifoldPlan PlanWithReturn(params double[] dns)
+        {
+            var p = Plan(dns);
+            p.WithReturn = true;
             return p;
         }
 
@@ -237,6 +244,65 @@ namespace SayRevit.Core.Tests
             var run = Assert.Single(p.ToParseResult().Plan.Runs);
             Assert.Null(run.ExplicitTypeName);
             Assert.Contains("predefinito del progetto", p.Summary());
+        }
+
+        [Fact]
+        public void Ritorno_CloneSpeculareInterlacciato()
+        {
+            var p = PlanWithReturn(20, 16, 25);
+            p.SpacingMm = 150;
+            p.ReturnOffsetMm = 300;
+            var plan = p.ToParseResult().Plan;
+
+            Assert.Equal(2, plan.Runs.Count);
+            var supply = plan.Runs[0];
+            var ret = plan.Runs[1];
+
+            // clone perfetto: stessa base, stessa direzione, stesso tipo
+            Assert.Equal(supply.Size.DiameterMm, ret.Size.DiameterMm);
+            Assert.Equal(supply.LengthMm, ret.LengthMm);
+            Assert.Equal(supply.Direction, ret.Direction);
+            Assert.False(ret.ContinuesPrevious);
+
+            // chirale: circuiti in ordine inverso
+            Assert.Equal(new double[] { 25, 16, 20 }, ret.Branches.Select(b => b.Size.DiameterMm).ToArray());
+            Assert.All(ret.Branches, b => Assert.False(b.Connect));
+
+            // asse parallelo a destra della mandata
+            Assert.Equal(-300, ret.OffsetSideMm);
+
+            // ogni circuito di ritorno a metà tra due di mandata:
+            // mandata globale: 60, 210, 360  →  metà: 135, 285 (e 435 oltre l'ultimo)
+            var supplyX = supply.Branches.Select(b => b.PositionsMm[0]).ToArray();
+            var returnX = ret.Branches.Select(b => b.PositionsMm[0] + ret.OffsetAlongMm.Value).ToArray();
+            Assert.Equal(supplyX[0] + 75, returnX[0], 6);   // (60+210)/2 = 135
+            Assert.Equal((supplyX[0] + supplyX[1]) / 2, returnX[0], 6);
+            Assert.Equal((supplyX[1] + supplyX[2]) / 2, returnX[1], 6);
+            Assert.Equal(supplyX[2] + 75, returnX[2], 6);
+        }
+
+        [Fact]
+        public void Ritorno_ConDnUgualiELoSfasamentoEMezzoInterasse()
+        {
+            var p = PlanWithReturn(20, 20, 20, 20);
+            p.SpacingMm = 200;
+            var ret = p.ToParseResult().Plan.Runs[1];
+            Assert.Equal(100, ret.OffsetAlongMm); // (20-20)/2 + 200/2
+        }
+
+        [Fact]
+        public void Ritorno_Disattivato_UnSoloTratto()
+        {
+            var plan = Plan(20, 16).ToParseResult().Plan;
+            Assert.Single(plan.Runs);
+        }
+
+        [Fact]
+        public void Ritorno_DistanzaNonValida_NonSiPuoCostruire()
+        {
+            var p = PlanWithReturn(20);
+            p.ReturnOffsetMm = 0;
+            Assert.False(p.ToParseResult().Success);
         }
 
         [Fact]

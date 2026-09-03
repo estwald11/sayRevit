@@ -183,9 +183,21 @@ namespace SayRevit.Addin.Revit
             }
             else if (previous != null)
             {
-                // tratto separato: affiancato al primo, 1 m più in là in -Y
-                var offset = new XYZ(0, -Units.MmToFt(1000) * index, 0);
-                start = new XYZ(firstStart.X + offset.X, firstStart.Y + offset.Y, zBase);
+                XYZ offset;
+                if (run.OffsetAlongMm.HasValue || run.OffsetSideMm.HasValue)
+                {
+                    // scostamento esplicito rispetto al primo tratto (es. collettore di ritorno)
+                    var left = XYZ.BasisZ.CrossProduct(dir);
+                    if (left.GetLength() < 1e-6) left = XYZ.BasisY; // tratto verticale
+                    left = left.Normalize();
+                    offset = dir * Units.MmToFt(run.OffsetAlongMm ?? 0) + left * Units.MmToFt(run.OffsetSideMm ?? 0);
+                }
+                else
+                {
+                    // tratto separato: affiancato al primo, 1 m più in là in -Y
+                    offset = new XYZ(0, -Units.MmToFt(1000) * index, 0);
+                }
+                start = new XYZ(firstStart.X + offset.X, firstStart.Y + offset.Y, zBase + offset.Z);
             }
             else
             {

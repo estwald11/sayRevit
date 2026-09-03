@@ -134,6 +134,15 @@ namespace SayRevit.Core.Model
         /// <summary>True se il tratto è la prosecuzione del precedente (collegato con gomito/transizione).</summary>
         public bool ContinuesPrevious { get; set; }
 
+        /// <summary>
+        /// Scostamento del punto di partenza rispetto al PRIMO tratto, lungo la direzione del tratto (mm).
+        /// Con <see cref="OffsetSideMm"/> valorizzato disattiva la disposizione automatica dei tratti separati.
+        /// </summary>
+        public double? OffsetAlongMm { get; set; }
+
+        /// <summary>Scostamento laterale rispetto al primo tratto (mm, positivo = sinistra della direzione).</summary>
+        public double? OffsetSideMm { get; set; }
+
         public List<MepBranch> Branches { get; } = new List<MepBranch>();
     }
 

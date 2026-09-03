@@ -29,6 +29,9 @@ namespace SayRevit.Addin
         public string ManifoldCircuits { get; set; } = string.Empty;
         /// <summary>Tipo di tubazione scelto nella sezione collettore (scelta deterministica).</summary>
         public string ManifoldPipeTypeName { get; set; } = string.Empty;
+        /// <summary>Se true si crea anche il collettore di ritorno (clone speculare interlacciato).</summary>
+        public bool ManifoldWithReturn { get; set; } = true;
+        public double ManifoldReturnOffsetMm { get; set; } = 300;
 
         public static string FilePath
         {
@@ -68,6 +71,8 @@ namespace SayRevit.Addin
                         case "ManifoldCircuitDirection": s.ManifoldCircuitDirection = v; break;
                         case "ManifoldCircuits": s.ManifoldCircuits = v; break;
                         case "ManifoldPipeTypeName": s.ManifoldPipeTypeName = v; break;
+                        case "ManifoldWithReturn": s.ManifoldWithReturn = v == "true"; break;
+                        case "ManifoldReturnOffsetMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var ro)) s.ManifoldReturnOffsetMm = ro; break;
                     }
                 }
             }
@@ -99,7 +104,9 @@ namespace SayRevit.Addin
                     "ManifoldHeaderDirection=" + ManifoldHeaderDirection,
                     "ManifoldCircuitDirection=" + ManifoldCircuitDirection,
                     "ManifoldCircuits=" + (ManifoldCircuits ?? string.Empty),
-                    "ManifoldPipeTypeName=" + (ManifoldPipeTypeName ?? string.Empty)
+                    "ManifoldPipeTypeName=" + (ManifoldPipeTypeName ?? string.Empty),
+                    "ManifoldWithReturn=" + (ManifoldWithReturn ? "true" : "false"),
+                    "ManifoldReturnOffsetMm=" + ManifoldReturnOffsetMm.ToString(CultureInfo.InvariantCulture)
                 };
                 File.WriteAllLines(FilePath, lines);
             }

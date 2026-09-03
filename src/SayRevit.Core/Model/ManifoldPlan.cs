@@ -61,6 +61,12 @@ namespace SayRevit.Core.Model
         /// <summary>Sporgenza del collettore oltre il BORDO del primo e dell'ultimo circuito (mm).</summary>
         public double OverhangMm { get; set; } = 50;
 
+        /// <summary>Se true viene creato anche il collettore di ritorno: clone speculare interlacciato.</summary>
+        public bool WithReturn { get; set; } = true;
+
+        /// <summary>Distanza tra l'asse della mandata e quello del ritorno (mm).</summary>
+        public double ReturnOffsetMm { get; set; } = 300;
+
         public DirectionKind HeaderDirection { get; set; } = DirectionKind.PlusX;
 
         public DirectionKind CircuitDirection { get; set; } = DirectionKind.Down;
@@ -182,43 +188,24 @@ namespace SayRevit.Core.Model
 
             var headerDn = EffectiveHeaderDnMm;
             if (headerDn <= 0) return ParseResult.Fail("DN del collettore non valido.");
+            if (WithReturn && ReturnOffsetMm <= 0)
+                return ParseResult.Fail("La distanza tra mandata e ritorno deve essere maggiore di zero.");
 
-            var run = new MepRun
-            {
-                Kind = MepKind.Pipe,
-                KindExplicit = true,
-                Size = MepSize.Round(headerDn, true),
-                LengthMm = HeaderLengthMm,
-                Direction = HeaderDirection,
-                ExplicitTypeName = string.IsNullOrWhiteSpace(PipeTypeName) ? null : PipeTypeName.Trim()
-            };
-
+            var run = MakeHeaderRun(headerDn);
             var positions = CircuitPositionsMm();
             for (var i = 0; i < circuits.Count; i++)
-            {
-                var branch = new MepBranch
-                {
-                    Size = MepSize.Round(circuits[i].DnMm, true),
-                    Count = 1,
-                    LengthMm = CircuitLengthMm,
-                    // I circuiti non vengono raccordati: solo sovrapposti al collettore, che resta
-                    // un tubo unico (il T di Revit ridimensionerebbe l'innesto alla misura del circuito).
-                    Connect = false,
-                    // Un circuito = un gruppo di stacchi con una sola posizione, quindi l'alternanza
-                    // non può essere risolta dall'indice a valle: la fissiamo qui.
-                    Direction = CircuitDirection == DirectionKind.Alternate
-                        ? (i % 2 == 0 ? DirectionKind.Left : DirectionKind.Right)
-                        : CircuitDirection
-                };
-                branch.PositionsMm.Add(positions[i]);
-                run.Branches.Add(branch);
-            }
+                run.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, positions[i]));
 
             var plan = new MepPlan { SourceText = Summary() };
             plan.Runs.Add(run);
+            if (WithReturn) plan.Runs.Add(MakeReturnRun(headerDn, circuits));
 
             var result = new ParseResult { Success = true, Plan = plan };
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
+            if (WithReturn)
+                result.Notes.Add("Collettore di ritorno: clone speculare (circuiti in ordine inverso) a " +
+                                 MepSize.Fmt(ReturnOffsetMm) + " mm dalla mandata, sfasato di mezzo interasse: " +
+                                 "ogni circuito di ritorno cade a metà tra due di mandata.");
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
             {
                 var computed = MepSize.Fmt(ComputedHeaderDnMm);
@@ -261,6 +248,66 @@ namespace SayRevit.Core.Model
             return result;
         }
 
+        private MepRun MakeHeaderRun(double headerDn)
+        {
+            return new MepRun
+            {
+                Kind = MepKind.Pipe,
+                KindExplicit = true,
+                Size = MepSize.Round(headerDn, true),
+                LengthMm = HeaderLengthMm,
+                Direction = HeaderDirection,
+                ExplicitTypeName = string.IsNullOrWhiteSpace(PipeTypeName) ? null : PipeTypeName.Trim()
+            };
+        }
+
+        private MepBranch MakeCircuitBranch(double dnMm, int index, double positionMm)
+        {
+            var branch = new MepBranch
+            {
+                Size = MepSize.Round(dnMm, true),
+                Count = 1,
+                LengthMm = CircuitLengthMm,
+                // I circuiti non vengono raccordati: solo sovrapposti al collettore, che resta
+                // un tubo unico (il T di Revit ridimensionerebbe l'innesto alla misura del circuito).
+                Connect = false,
+                // Un circuito = un gruppo di stacchi con una sola posizione, quindi l'alternanza
+                // non può essere risolta dall'indice a valle: la fissiamo qui.
+                Direction = CircuitDirection == DirectionKind.Alternate
+                    ? (index % 2 == 0 ? DirectionKind.Left : DirectionKind.Right)
+                    : CircuitDirection
+            };
+            branch.PositionsMm.Add(positionMm);
+            return branch;
+        }
+
+        /// <summary>
+        /// Collettore di ritorno: clone speculare (circuiti in ordine inverso, stessa base) su un asse
+        /// parallelo a <see cref="ReturnOffsetMm"/>, sfasato lungo l'asse in modo che ogni circuito di
+        /// ritorno cada a metà strada tra due circuiti di mandata (clone perfetto ma chirale).
+        /// La lunghezza della base non cambia: le sporgenze si scambiano semplicemente di estremità.
+        /// </summary>
+        private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits)
+        {
+            var ret = MakeHeaderRun(headerDn);
+
+            var reversed = new List<ManifoldCircuit>(circuits);
+            reversed.Reverse();
+
+            // Posizioni locali del clone speculare: stessa regola della mandata, su lista invertita.
+            var start = OverhangMm + reversed[0].DnMm / 2.0;
+            for (var j = 0; j < reversed.Count; j++)
+                ret.Branches.Add(MakeCircuitBranch(reversed[j].DnMm, j, start + j * SpacingMm));
+
+            // Sfasamento lungo l'asse: il primo circuito di ritorno deve cadere a metà tra
+            // il primo e il secondo di mandata → (dn₁ - dnₙ)/2 + interasse/2.
+            var first = circuits[0].DnMm;
+            var last = circuits[circuits.Count - 1].DnMm;
+            ret.OffsetAlongMm = (first - last) / 2.0 + SpacingMm / 2.0;
+            ret.OffsetSideMm = -ReturnOffsetMm; // alla destra della direzione della mandata
+            return ret;
+        }
+
         /// <summary>Riepilogo compatto mostrato sopra l'anteprima.</summary>
         public string Summary()
         {
@@ -274,6 +321,9 @@ namespace SayRevit.Core.Model
             sb.Append(", ").Append(circuits.Count).Append(circuits.Count == 1 ? " circuito" : " circuiti");
             sb.Append(", interasse ").Append(MepSize.Fmt(SpacingMm)).Append(" mm.");
             sb.AppendLine();
+            if (WithReturn)
+                sb.Append("Ritorno: clone speculare a ").Append(MepSize.Fmt(ReturnOffsetMm))
+                  .Append(" mm, sfasato di ").Append(MepSize.Fmt(SpacingMm / 2.0)).Append(" mm.").AppendLine();
             sb.Append("Tipo tubazione: ")
               .Append(string.IsNullOrWhiteSpace(PipeTypeName) ? "predefinito del progetto" : "\"" + PipeTypeName.Trim() + "\"")
               .AppendLine();

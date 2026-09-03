@@ -112,6 +112,12 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   diversi le due sporgenze d'asse sono diverse.
 - **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
   (basso, alto, sinistra, destra, alternati).
+- **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno, un clone
+  perfetto ma **chirale** della mandata: stessa base (stesso DN e stessa lunghezza), circuiti
+  identici in ordine inverso, su un asse parallelo alla **distanza mandata/ritorno** indicata,
+  sfasato di mezzo interasse così che ogni circuito di ritorno cada a metà tra due circuiti
+  di mandata.
+
 A differenza della modalità testuale, **i circuiti non vengono raccordati**: il collettore
 resta un tubo unico (nessun `BreakCurve`) e ogni circuito parte dall'asse del collettore,
 semplicemente sovrapposto. Un raccordo a T di Revit spezzerebbe il collettore e
