@@ -122,7 +122,7 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo interasse, così
   ogni circuito di un collettore cade a metà tra due dell'altro, e tutti gli stacchi
   vengono sempre replicati su entrambi. Gli stacchi sfasati di mezzo interasse
-  stanno sul secondo collettore, quelli non sfasati sul primo.
+  stanno sul primo collettore, quelli non sfasati sul secondo.
 
 - **Fondelli (Enddeckel)**: alle quattro estremità delle basi (mandata e ritorno) vengono
   posizionati automaticamente dei fondelli, orientati, dimensionati e collegati al tubo.
