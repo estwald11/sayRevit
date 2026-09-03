@@ -1,38 +1,34 @@
-"""Genera docs/Installazione_sayRevit.pdf (guida di installazione in italiano)."""
+"""Genera docs/Installazione_sayRevit.pdf (guida di installazione passo-passo, in italiano)."""
+import os
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (ListFlowable, ListItem, PageBreak, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table,
-                                TableStyle, KeepTogether)
+from reportlab.platypus import (KeepTogether, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle)
 
 FONT_DIR = "/usr/share/fonts/truetype/dejavu/"
 pdfmetrics.registerFont(TTFont("DejaVu", FONT_DIR + "DejaVuSans.ttf"))
 pdfmetrics.registerFont(TTFont("DejaVu-Bold", FONT_DIR + "DejaVuSans-Bold.ttf"))
-OBL = FONT_DIR + "DejaVuSans-Oblique.ttf"
-import os
-pdfmetrics.registerFont(TTFont("DejaVu-Oblique", OBL if os.path.exists(OBL) else FONT_DIR + "DejaVuSans.ttf"))
 pdfmetrics.registerFont(TTFont("DejaVuMono", FONT_DIR + "DejaVuSansMono.ttf"))
-pdfmetrics.registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold", italic="DejaVu-Oblique", boldItalic="DejaVu-Bold")
+pdfmetrics.registerFontFamily("DejaVu", normal="DejaVu", bold="DejaVu-Bold", italic="DejaVu", boldItalic="DejaVu-Bold")
 
 OUT = "docs/Installazione_sayRevit.pdf"
 BLUE = colors.HexColor("#1F6FB2")
 GREY = colors.HexColor("#555555")
 LIGHT = colors.HexColor("#F3F6FA")
+BORDER = colors.HexColor("#BBBBBB")
 
 ss = getSampleStyleSheet()
-body = ParagraphStyle("body", parent=ss["Normal"], fontName="DejaVu", fontSize=10, leading=14, spaceAfter=6)
+body = ParagraphStyle("body", parent=ss["Normal"], fontName="DejaVu", fontSize=10, leading=14, spaceAfter=4)
 small = ParagraphStyle("small", parent=body, fontSize=8.5, leading=11, textColor=GREY)
-h1 = ParagraphStyle("h1", parent=body, fontName="DejaVu-Bold", fontSize=20, leading=24, textColor=BLUE, spaceAfter=4)
-h2 = ParagraphStyle("h2", parent=body, fontName="DejaVu-Bold", fontSize=13, leading=17, textColor=BLUE, spaceBefore=12, spaceAfter=4)
-h3 = ParagraphStyle("h3", parent=body, fontName="DejaVu-Bold", fontSize=10.5, leading=14, spaceBefore=6, spaceAfter=2)
+h1 = ParagraphStyle("h1", parent=body, fontName="DejaVu-Bold", fontSize=20, leading=24, textColor=BLUE, spaceAfter=2)
+h2 = ParagraphStyle("h2", parent=body, fontName="DejaVu-Bold", fontSize=13, leading=17, textColor=BLUE, spaceBefore=8, spaceAfter=3)
+stepTitle = ParagraphStyle("stepTitle", parent=body, fontName="DejaVu-Bold", fontSize=10.5, leading=14, spaceAfter=2)
 code = ParagraphStyle("code", parent=body, fontName="DejaVuMono", fontSize=8.8, leading=12, backColor=LIGHT,
-                      borderPadding=(5, 6, 5, 6), leftIndent=4, rightIndent=4, spaceBefore=4, spaceAfter=8)
-note = ParagraphStyle("note", parent=body, backColor=colors.HexColor("#FFF7E0"), borderPadding=(5, 6, 5, 6),
-                      leftIndent=4, rightIndent=4, spaceBefore=4, spaceAfter=8)
+                      borderPadding=(4, 5, 4, 5), spaceBefore=2, spaceAfter=2)
+numStyle = ParagraphStyle("num", parent=body, fontName="DejaVu-Bold", fontSize=11, leading=13, textColor=colors.white, alignment=1)
 
 
 def P(t, st=body):
@@ -43,148 +39,141 @@ def Code(t):
     return Preformatted(t, code)
 
 
-def Bullets(items, numbered=False):
-    return ListFlowable([ListItem(P(i), leftIndent=12) for i in items],
-                        bulletType="1" if numbered else "bullet", bulletFontName="DejaVu", bulletFontSize=9,
-                        leftIndent=14, spaceAfter=6)
+def Step(n, title, blocks):
+    """Un passo numerato: cerchio blu con il numero a sinistra, titolo + contenuto a destra."""
+    numCell = Table([[P(str(n), numStyle)]], colWidths=[10 * mm], rowHeights=[9 * mm])
+    numCell.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, 0), BLUE),
+        ("ALIGN", (0, 0), (0, 0), "CENTER"),
+        ("VALIGN", (0, 0), (0, 0), "MIDDLE"),
+        ("ROUNDEDCORNERS", [8, 8, 8, 8]),
+    ]))
+    right = [P(title, stepTitle)] + blocks
+    t = Table([[numCell, right]], colWidths=[13 * mm, 157 * mm])
+    t.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    return KeepTogether(t)
 
 
 def footer(canvas, doc):
     canvas.saveState()
     canvas.setFont("DejaVu", 8)
     canvas.setFillColor(GREY)
-    canvas.drawString(20 * mm, 12 * mm, "sayRevit – Guida all'installazione")
-    canvas.drawRightString(A4[0] - 20 * mm, 12 * mm, "Pagina %d" % doc.page)
+    canvas.drawString(18 * mm, 12 * mm, "sayRevit – Installazione passo per passo")
+    canvas.drawRightString(A4[0] - 18 * mm, 12 * mm, "Pagina %d" % doc.page)
     canvas.restoreState()
 
 
 story = []
-story.append(P("sayRevit – Guida all'installazione", h1))
-story.append(P("Add-in per Autodesk Revit che crea tubazioni e canali (con stacchi) a partire da una descrizione testuale, "
-               "usando i tipi, i sistemi e i livelli già presenti nel progetto.", body))
-story.append(P("Repository: https://github.com/markwilson666/sayRevit &nbsp;·&nbsp; branch: claude/revit-mep-text-interface-etmi4j", small))
-story.append(Spacer(1, 6))
+story.append(P("sayRevit – Installazione", h1))
+story.append(P("Add-in per Revit che crea tubazioni e canali (con stacchi) da una descrizione scritta. "
+               "Segui i passi nell'ordine: al passo 10 avrai la prima tubazione nel modello.", body))
+story.append(P("Repository: https://github.com/markwilson666/sayRevit · branch: claude/revit-mep-text-interface-etmi4j", small))
+story.append(Spacer(1, 8))
 
-story.append(P("1. Requisiti", h2))
-tbl = Table([
-    [P("<b>Versione Revit</b>"), P("<b>Runtime</b>"), P("<b>SDK da installare per compilare</b>")],
-    [P("Revit 2024"), P(".NET Framework 4.8 (già incluso in Windows)"), P(".NET SDK 8")],
-    [P("Revit 2025 / 2026"), P(".NET 8"), P(".NET SDK 8")],
-    [P("Revit 2027"), P(".NET 10"), P(".NET SDK 10")],
-    [P("(qualsiasi)"), P("rilevato dallo script da RevitAPI.runtimeconfig.json"), P("SDK di versione uguale o superiore al runtime")],
-], colWidths=[38 * mm, 70 * mm, 62 * mm])
+story.append(Step(1, "Verifica la tua versione di Revit", [
+    P("Apri Revit → menu ? (in alto a destra) → <b>Informazioni su Autodesk Revit</b>. Annota l'anno: "
+      "<b>2024, 2025, 2026 o 2027</b>. Ti servirà ai passi 2 e 6. Poi chiudi Revit."),
+]))
+
+story.append(Step(2, "Installa l'SDK .NET", [
+    P("Vai su <b>https://dotnet.microsoft.com/download</b> e scarica l'installer per Windows x64 di:"),
+    P("• <b>.NET SDK 8</b> se hai Revit 2024, 2025 o 2026<br/>• <b>.NET SDK 10</b> se hai Revit 2027"),
+    P("Esegui l'installer e completa con Avanti fino alla fine. Serve solo per compilare: scegli l'<b>SDK</b>, non il \"Runtime\"."),
+]))
+
+story.append(Step(3, "Installa Git per Windows", [
+    P("Vai su <b>https://git-scm.com/download/win</b>, scarica l'installer ed eseguilo accettando le opzioni proposte."),
+]))
+
+story.append(Step(4, "Scarica il codice di sayRevit", [
+    P("Premi <b>Start</b>, scrivi <b>PowerShell</b> e apri \"Windows PowerShell\" (utente normale, non amministratore). "
+      "Copia e incolla queste tre righe, poi premi Invio:"),
+    Code("git clone https://github.com/markwilson666/sayRevit\n"
+         "cd sayRevit\n"
+         "git checkout claude/revit-mep-text-interface-etmi4j"),
+    P("Risultato: viene creata la cartella <font face='DejaVuMono'>sayRevit</font> nella posizione in cui si trovava "
+      "PowerShell (di solito <font face='DejaVuMono'>C:\\Users\\&lt;tuo utente&gt;</font>) e PowerShell è già al suo interno. "
+      "<b>Non chiudere questa finestra</b>: serve anche ai passi 5 e 6."),
+]))
+
+story.append(Step(5, "Autorizza l'esecuzione degli script (solo per questa finestra)", [
+    P("Nella stessa finestra di PowerShell incolla e premi Invio:"),
+    Code("Set-ExecutionPolicy -Scope Process Bypass"),
+    P("Se compare una domanda, rispondi <b>S</b> (Sì). Vale solo per questa finestra di PowerShell."),
+]))
+
+story.append(Step(6, "Compila e installa", [
+    P("Sempre nella stessa finestra, incolla il comando sostituendo <b>2025</b> con l'anno annotato al passo 1:"),
+    Code(".\\scripts\\install.ps1 -RevitVersion 2025"),
+    P("Lo script trova la tua installazione di Revit, compila l'add-in per il runtime esatto di quel Revit e copia da solo "
+      "tutti i file al posto giusto. Al termine deve comparire la scritta verde "
+      "<b>\"Installato in: …\\Addins\\&lt;anno&gt;\\SayRevit\"</b>. Se invece compare un errore rosso, vedi la tabella all'ultima pagina."),
+]))
+
+story.append(Step(7, "Avvia Revit e autorizza l'add-in", [
+    P("Apri Revit. Alla finestra di sicurezza che nomina \"sayRevit\" premi <b>Carica sempre</b>."),
+]))
+
+story.append(Step(8, "Apri un progetto MEP e una pianta", [
+    P("Crea un nuovo progetto scegliendo il modello <b>Impianti</b> (o Meccanico/Sistemi), oppure apri un tuo progetto MEP. "
+      "Apri una <b>vista in pianta</b> di un livello (es. Livello 1)."),
+]))
+
+story.append(Step(9, "Apri il comando", [
+    P("Nella barra multifunzione in alto, clicca la scheda <b>sayRevit</b> e poi il pulsante <b>Testo → Tubazioni/Canali</b>."),
+]))
+
+story.append(Step(10, "Crea la prima tubazione", [
+    P("Nella casella di testo scrivi esattamente:"),
+    Code("una tubazione DN100 lunga 6 m con 3 stacchi DN20 ogni 1,5 m verso l'alto"),
+    P("Premi <b>Interpreta (anteprima)</b> e controlla il riepilogo. Poi premi <b>Crea in Revit</b>: compare un resoconto e "
+      "gli elementi restano selezionati. Aprili in una vista 3D per vederli. Per eliminarli tutti insieme: <b>Ctrl+Z</b>."),
+]))
+
+story.append(P("Aggiornare / rimuovere", h2))
+story.append(P("<b>Aggiornare</b>: chiudi Revit, apri PowerShell nella cartella <font face='DejaVuMono'>sayRevit</font> "
+               "(tasto destro sulla cartella → \"Apri nel terminale\") ed esegui, con il tuo anno:"))
+story.append(Code("git pull\nSet-ExecutionPolicy -Scope Process Bypass\n.\\scripts\\install.ps1 -RevitVersion 2025"))
+story.append(P("<b>Rimuovere</b>: stesso procedimento con <font face='DejaVuMono'>.\\scripts\\uninstall.ps1 -RevitVersion 2025</font>."))
+
+story.append(P("Modalità Claude (facoltativa)", h2))
+story.append(P("Serve una chiave API Anthropic. Start → \"variabili d'ambiente\" → <b>Modifica le variabili d'ambiente relative "
+               "all'account</b> → Nuova… → nome <font face='DejaVuMono'>ANTHROPIC_API_KEY</font>, valore = la tua chiave → OK. "
+               "Riavvia Revit e nella finestra scegli <b>Interprete: Claude (AI)</b>. Senza chiave usa l'interprete \"Regole (offline)\": "
+               "funziona sempre, senza internet."))
+
+story.append(P("Se qualcosa non va", h2))
+rows = [
+    [P("<b>Errore / sintomo</b>"), P("<b>Soluzione</b>")],
+    [P("\"l'esecuzione di script è disabilitata\""), P("Hai saltato il passo 5: esegui il comando del passo 5 e ripeti il passo 6.")],
+    [P("\"dotnet non riconosciuto\""), P("Hai saltato il passo 2, o PowerShell era aperto durante l'installazione dell'SDK: chiudi e riapri PowerShell, esegui cd sayRevit e ripeti dal passo 5.")],
+    [P("\"Revit … non trovato in C:\\Program Files\\Autodesk\\…\""), P("L'anno indicato al passo 6 non corrisponde a un Revit installato. Il messaggio elenca le versioni trovate: ripeti il passo 6 con una di quelle.")],
+    [P("All'avvio di Revit: \"Could not load file or assembly 'System.Runtime…'\""), P("Add-in compilato per un'altra versione di Revit. Esegui uninstall.ps1 con l'anno sbagliato, poi install.ps1 con l'anno giusto (passo 1).")],
+    [P("La scheda sayRevit non compare"), P("Alla finestra di sicurezza hai premuto \"Non caricare\". Chiudi Revit, ripeti il passo 6 e all'avvio premi Carica sempre.")],
+    [P("\"Il progetto non contiene tipi di tubazione/canale\""), P("Il progetto non è MEP: ripeti il passo 8 scegliendo il modello Impianti.")],
+    [P("Nel resoconto: stacchi \"lasciati scollegati\""), P("Mancano i raccordi nel tipo usato: seleziona una tubazione → Modifica tipo → Preferenze di instradamento → imposta Giunzioni e Gomiti, poi riprova.")],
+]
+tbl = Table(rows, colWidths=[62 * mm, 108 * mm])
 tbl.setStyle(TableStyle([
     ("BACKGROUND", (0, 0), (-1, 0), LIGHT),
-    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BBBBBB")),
+    ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
     ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
     ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
 ]))
 story.append(tbl)
 story.append(Spacer(1, 6))
-story.append(Bullets([
-    "Windows 10/11 a 64 bit con Autodesk Revit installato (edizione con strumenti MEP: sono necessari tipi di tubazione e canale nel progetto).",
-    "<b>.NET SDK</b> (8 oppure 10, vedi tabella) scaricabile da https://dotnet.microsoft.com/download. Serve solo per compilare l'add-in.",
-    "<b>Git per Windows</b> (https://git-scm.com) oppure il download dello zip del branch da GitHub.",
-    "Facoltativo, solo per la modalità Claude: una chiave API Anthropic.",
-]))
+story.append(P("Per ogni altro problema: copia il messaggio d'errore esatto e la versione di Revit e inviali allo sviluppatore.", small))
 
-story.append(P("2. Scaricare il codice", h2))
-story.append(P("Apri <b>PowerShell</b> (non serve come amministratore) e lancia:"))
-story.append(Code("git clone https://github.com/markwilson666/sayRevit\n"
-                  "cd sayRevit\n"
-                  "git checkout claude/revit-mep-text-interface-etmi4j"))
-story.append(P("In alternativa scarica lo zip del branch da GitHub (pulsante <i>Code → Download ZIP</i> dopo aver selezionato il branch), "
-               "estrailo e apri PowerShell nella cartella estratta."))
-
-story.append(P("3. Compilare e installare", h2))
-story.append(P("Sempre da PowerShell, nella cartella del progetto, esegui lo script indicando la <b>tua</b> versione di Revit:"))
-story.append(Code(".\\scripts\\install.ps1 -RevitVersion 2025      # oppure 2024, 2026, 2027"))
-story.append(P("Lo script cerca Revit in <font face='DejaVuMono'>C:\\Program Files\\Autodesk\\Revit &lt;versione&gt;</font>, legge il runtime .NET "
-               "su cui gira quel Revit (file RevitAPI.runtimeconfig.json), compila l'add-in per lo stesso framework con le librerie API "
-               "dell'installazione e copia i file in:"))
-story.append(Code("%APPDATA%\\Autodesk\\Revit\\Addins\\<versione>\\SayRevit\\      (librerie)\n"
-                  "%APPDATA%\\Autodesk\\Revit\\Addins\\<versione>\\SayRevit.addin  (manifest)"))
-story.append(P("<b>Importante:</b> indica la versione di Revit <b>realmente installata</b>. Un add-in compilato per una versione "
-               "diversa non viene caricato (vedi la tabella dei problemi). Se hai più versioni, ripeti lo script per ciascuna.", note))
-story.append(P("Se PowerShell rifiuta di eseguire lo script (\"l'esecuzione di script è disabilitata\"), sblocca l'esecuzione "
-               "solo per la finestra corrente e riprova:", note))
-story.append(Code("Set-ExecutionPolicy -Scope Process Bypass\n.\\scripts\\install.ps1 -RevitVersion 2025"))
-story.append(P("Compilazione manuale (senza script)", h3))
-story.append(Code("dotnet build src/SayRevit.Addin/SayRevit.Addin.csproj -c Release -p:RevitVersion=2025"))
-story.append(P("I file compilati si trovano in <font face='DejaVuMono'>artifacts\\&lt;versione&gt;\\</font>: copia l'intera cartella in "
-               "<font face='DejaVuMono'>%APPDATA%\\Autodesk\\Revit\\Addins\\&lt;versione&gt;\\SayRevit\\</font> e il file "
-               "<font face='DejaVuMono'>SayRevit.addin</font> nella cartella <font face='DejaVuMono'>Addins\\&lt;versione&gt;\\</font>."))
-
-story.append(P("4. Primo avvio di Revit", h2))
-story.append(Bullets([
-    "Avvia Revit. Alla richiesta di sicurezza sull'add-in \"sayRevit\" scegli <b>Carica sempre</b>.",
-    "Apri un progetto creato dal <b>modello MEP</b> (Sistemi / Meccanico): servono almeno un tipo di tubazione o di canale e un tipo di sistema.",
-    "Posizionati in una <b>vista in pianta</b> di un livello.",
-    "Nella barra multifunzione compare la scheda <b>sayRevit</b> con il pulsante <b>Testo → Tubazioni/Canali</b>.",
-], numbered=True))
-
-story.append(P("5. Test di funzionamento", h2))
-story.append(Bullets([
-    "Lascia <i>Interprete: Regole (offline)</i> e <i>Punto iniziale: Origine del progetto</i>.",
-    "Scrivi nella casella: <font face='DejaVuMono'>una tubazione DN100 lunga 6 m con 3 stacchi DN20 ogni 1,5 m verso l'alto</font>",
-    "Premi <b>Interpreta (anteprima)</b> e leggi il riepilogo con eventuali avvisi (es. diametro non presente nel tipo).",
-    "Premi <b>Crea in Revit</b>. Compare un resoconto e gli elementi creati restano selezionati: aprili in una vista 3D.",
-    "Per annullare tutto in un colpo solo usa <b>Annulla</b> di Revit (Ctrl+Z): la creazione è un'unica transazione.",
-], numbered=True))
-story.append(P("Altre frasi da provare", h3))
-story.append(Code("canale 400x200 aria di mandata lungo 8 m con 2 stacchi 200x200 laterali\n"
-                  "tubo in acciaio zincato DN50 acqua calda sanitaria al livello 1 a quota 2,8 m lungo 4 m\n"
-                  "tubazione DN80 lunga 5 m; poi verso l'alto per 2 m; poi DN65 lungo x per 3 m\n"
-                  "tubazione DN50 lunga 6 m con stacchi DN15 a 1, 2.5 e 4 m dall'inizio"))
-
-story.append(P("6. Modalità Claude (facoltativa)", h2))
-story.append(Bullets([
-    "Imposta la variabile d'ambiente <b>ANTHROPIC_API_KEY</b>: Impostazioni di Windows → Sistema → Informazioni → "
-    "Impostazioni di sistema avanzate → Variabili d'ambiente → Nuova (variabili utente).",
-    "Riavvia Revit (le variabili si leggono all'avvio).",
-    "Nella finestra scegli <i>Interprete: Claude (AI)</i>. Il modello predefinito è <font face='DejaVuMono'>claude-opus-5</font>.",
-    "Senza chiave l'add-in funziona normalmente con l'interprete a regole, completamente offline.",
-]))
-
-story.append(P("7. Aggiornare o rimuovere", h2))
-story.append(P("Aggiornamento: nella cartella del progetto esegui <font face='DejaVuMono'>git pull</font> e poi di nuovo "
-               "<font face='DejaVuMono'>.\\scripts\\install.ps1 -RevitVersion &lt;versione&gt;</font> con Revit chiuso."))
-story.append(P("Rimozione:"))
-story.append(Code(".\\scripts\\uninstall.ps1 -RevitVersion 2025"))
-
-story.append(P("8. Risoluzione dei problemi", h2))
-prob = Table([
-    [P("<b>Sintomo</b>"), P("<b>Cosa controllare</b>")],
-    [P("La scheda sayRevit non compare"), P("Verifica che in <font face='DejaVuMono'>%APPDATA%\\Autodesk\\Revit\\Addins\\&lt;versione&gt;</font> ci siano "
-                                           "il file SayRevit.addin e la cartella SayRevit, e che la versione passata allo script sia quella di Revit. "
-                                           "Controlla di aver risposto \"Carica sempre\" all'avviso di sicurezza.")],
-    [P("Errore all'avvio: \"Could not load file or assembly 'System.Runtime, Version=10.0.0.0'\" (o 8.0.0.0)"),
-     P("L'add-in è stato compilato per un runtime .NET diverso da quello di Revit (es. compilato per Revit 2027/.NET 10 ma caricato "
-       "da Revit 2025-2026/.NET 8). Rimuovi con uninstall.ps1 e rilancia install.ps1 con la versione di Revit realmente installata: "
-       "lo script legge il runtime dalla cartella di Revit e compila di conseguenza.")],
-    [P("Errore \"dotnet non riconosciuto\""), P("L'SDK .NET non è installato o PowerShell è stato aperto prima dell'installazione: installa l'SDK e riapri PowerShell.")],
-    [P("\"Il progetto non contiene tipi di tubazione/canale\""), P("Il progetto non è basato su un modello MEP: apri un progetto con contenuti Sistemi/Meccanico o carica un tipo di tubazione.")],
-    [P("Stacchi creati ma \"lasciati scollegati\""), P("Nel tipo di tubazione/canale usato apri <i>Preferenze di instradamento</i> e verifica che esistano famiglie per "
-                                                      "Giunzioni (raccordo a T o presa) e Gomiti; caricale dalla libreria di Revit e riprova.")],
-    [P("Misura diversa da quella richiesta"), P("Il diametro non è tra quelli del tipo: l'add-in usa il più vicino e lo segnala nell'anteprima. Scegli un altro tipo con "
-                                               "<font face='DejaVuMono'>tipo \"Nome del tipo\"</font> oppure aggiungi la misura al segmento del tipo.")],
-    [P("Errore durante la creazione"), P("Copia il testo del resoconto, la frase usata e la versione di Revit e inviali per la correzione. Nulla resta nel modello: "
-                                        "la transazione viene annullata.")],
-], colWidths=[52 * mm, 118 * mm])
-prob.setStyle(TableStyle([
-    ("BACKGROUND", (0, 0), (-1, 0), LIGHT),
-    ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BBBBBB")),
-    ("VALIGN", (0, 0), (-1, -1), "TOP"),
-    ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-    ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-]))
-story.append(prob)
-story.append(Spacer(1, 8))
-story.append(P("Nota: l'add-in è compilato contro le API Revit 2024–2027 ma va verificato nel proprio modello, perché famiglie e preferenze di "
-               "instradamento cambiano da progetto a progetto. Usa sempre l'anteprima prima di creare.", small))
-
-doc = SimpleDocTemplate(OUT, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=20 * mm,
-                        title="sayRevit – Guida all'installazione", author="sayRevit", subject="Installazione dell'add-in sayRevit per Revit")
+os.makedirs("docs", exist_ok=True)
+doc = SimpleDocTemplate(OUT, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=16 * mm, bottomMargin=20 * mm,
+                        title="sayRevit – Installazione passo per passo", author="sayRevit",
+                        subject="Installazione dell'add-in sayRevit per Revit")
 doc.build(story, onFirstPage=footer, onLaterPages=footer)
 print("scritto", OUT)
