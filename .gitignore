@@ -7,7 +7,7 @@ obj/
 *.swp
 TestResults/
 artifacts/
-# file Revit proprietari (template/famiglie/progetti): mai nel repository pubblico
+# file Revit
 *.rfa
 *.rte
 *.rvt
