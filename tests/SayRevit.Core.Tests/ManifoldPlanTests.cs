@@ -283,14 +283,14 @@ namespace SayRevit.Core.Tests
             Assert.Equal(new double[] { 20, 16, 25 }, second.Branches.Select(b => b.Size.DiameterMm).ToArray());
             Assert.All(second.Branches, b => Assert.False(b.Connect));
 
-            // collettori scambiati: il PRIMO porta gli stacchi sfasati (135, 285, 435),
-            // il secondo quelli non sfasati (60, 210, 360); interlacciati a metà l'uno dell'altro
+            // chiralità: il primo porta gli stacchi non sfasati (60, 210, 360),
+            // il SECONDO quelli sfasati (135, 285, 435); interlacciati a metà l'uno dell'altro
             var firstX = first.Branches.Select(b => b.PositionsMm[0]).ToArray();
             var secondX = second.Branches.Select(b => b.PositionsMm[0]).ToArray();
-            Assert.Equal(new double[] { 135, 285, 435 }, firstX);
-            Assert.Equal(new double[] { 60, 210, 360 }, secondX);
-            Assert.Equal((secondX[0] + secondX[1]) / 2, firstX[0], 6);
-            Assert.Equal((secondX[1] + secondX[2]) / 2, firstX[1], 6);
+            Assert.Equal(new double[] { 60, 210, 360 }, firstX);
+            Assert.Equal(new double[] { 135, 285, 435 }, secondX);
+            Assert.Equal((firstX[0] + firstX[1]) / 2, secondX[0], 6);
+            Assert.Equal((firstX[1] + firstX[2]) / 2, secondX[1], 6);
         }
 
         [Fact]
@@ -324,11 +324,11 @@ namespace SayRevit.Core.Tests
                     Assert.InRange(b.PositionsMm[0], 1, run.LengthMm - 1);
                 }
             }
-            // 5 cm esatti sul primo stacco di UN collettore (il secondo, non sfasato)...
-            Assert.Equal(50, second.Branches[0].PositionsMm[0] - 20 / 2.0);
-            // ...e sull'ultimo stacco dell'ALTRO (il primo, sfasato)
-            var lastFirst = first.Branches[first.Branches.Count - 1];
-            Assert.Equal(50, first.LengthMm - lastFirst.PositionsMm[0] - 20 / 2.0, 6);
+            // 5 cm esatti sul primo stacco di UN collettore (il primo, non sfasato)...
+            Assert.Equal(50, first.Branches[0].PositionsMm[0] - 20 / 2.0);
+            // ...e sull'ultimo stacco dell'ALTRO (il secondo, sfasato)
+            var lastSecond = second.Branches[second.Branches.Count - 1];
+            Assert.Equal(50, second.LengthMm - lastSecond.PositionsMm[0] - 20 / 2.0, 6);
             Assert.DoesNotContain(r.Warnings, w => w.Contains("oltre la fine della base"));
         }
 
