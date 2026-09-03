@@ -23,7 +23,6 @@ namespace SayRevit.Addin
         public double ManifoldHeaderDnMm { get; set; }
         public double ManifoldSpacingMm { get; set; } = 150;
         public double ManifoldCircuitLengthMm { get; set; } = 500;
-        public string ManifoldHeaderDirection { get; set; } = "PlusX";
         public string ManifoldCircuitDirection { get; set; } = "Down";
         /// <summary>DN dei circuiti separati da ";" (es. "20;16;16").</summary>
         public string ManifoldCircuits { get; set; } = string.Empty;
@@ -67,7 +66,6 @@ namespace SayRevit.Addin
                         case "ManifoldHeaderDnMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var hdn)) s.ManifoldHeaderDnMm = hdn; break;
                         case "ManifoldSpacingMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var sp)) s.ManifoldSpacingMm = sp; break;
                         case "ManifoldCircuitLengthMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var cl)) s.ManifoldCircuitLengthMm = cl; break;
-                        case "ManifoldHeaderDirection": s.ManifoldHeaderDirection = v; break;
                         case "ManifoldCircuitDirection": s.ManifoldCircuitDirection = v; break;
                         case "ManifoldCircuits": s.ManifoldCircuits = v; break;
                         case "ManifoldPipeTypeName": s.ManifoldPipeTypeName = v; break;
@@ -101,7 +99,6 @@ namespace SayRevit.Addin
                     "ManifoldHeaderDnMm=" + ManifoldHeaderDnMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldSpacingMm=" + ManifoldSpacingMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldCircuitLengthMm=" + ManifoldCircuitLengthMm.ToString(CultureInfo.InvariantCulture),
-                    "ManifoldHeaderDirection=" + ManifoldHeaderDirection,
                     "ManifoldCircuitDirection=" + ManifoldCircuitDirection,
                     "ManifoldCircuits=" + (ManifoldCircuits ?? string.Empty),
                     "ManifoldPipeTypeName=" + (ManifoldPipeTypeName ?? string.Empty),

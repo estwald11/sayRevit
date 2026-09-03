@@ -113,14 +113,15 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
   vale sul **primo stacco della mandata** e sull'**ultimo stacco del ritorno** (mezzo
   interasse più avanti): entrambe le basi, identiche e allineate, si allungano di s/2 e
   nessuno stacco cade mai fuori dalla base.
-- **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
-  (basso, alto, sinistra, destra, alternati).
+- **Lunghezza circuiti** e **partenza circuiti** (basso, alto, sinistra, destra, alternati).
+  La direzione dei collettori è fissa: +X (est).
 - **Collettore di ritorno**: spuntando l'opzione viene creato anche il ritorno: base
   **identica e perfettamente allineata** alla mandata (stesso DN, stessa lunghezza, stessi
   estremi) su un asse parallelo alla **distanza mandata/ritorno** indicata. Solo gli stacchi
   vengono riposizionati: stessi DN nello stesso ordine, spostati di mezzo interasse, così
-  ogni circuito di ritorno cade a metà tra due circuiti di mandata, e tutti gli stacchi
-  della mandata vengono sempre replicati sul ritorno.
+  ogni circuito di un collettore cade a metà tra due dell'altro, e tutti gli stacchi
+  vengono sempre replicati su entrambi. I due collettori sono **scambiati**: gli stacchi
+  sfasati di mezzo interasse stanno sul primo collettore, quelli non sfasati sul secondo.
 
 - **Fondelli (Enddeckel)**: alle quattro estremità delle basi (mandata e ritorno) vengono
   posizionati automaticamente dei fondelli, orientati, dimensionati e collegati al tubo.

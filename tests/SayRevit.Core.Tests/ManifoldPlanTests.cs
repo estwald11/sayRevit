@@ -257,7 +257,7 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void Ritorno_BaseAllineataStacchiInterlacciati()
+        public void Ritorno_BaseAllineataStacchiInterlacciatiEScambiati()
         {
             var p = PlanWithReturn(20, 16, 25);
             p.SpacingMm = 150;
@@ -265,30 +265,31 @@ namespace SayRevit.Core.Tests
             var plan = p.ToParseResult().Plan;
 
             Assert.Equal(2, plan.Runs.Count);
-            var supply = plan.Runs[0];
-            var ret = plan.Runs[1];
+            var first = plan.Runs[0];
+            var second = plan.Runs[1];
 
             // clone perfetto: stessa base, stessa direzione, stesso tipo
-            Assert.Equal(supply.Size.DiameterMm, ret.Size.DiameterMm);
-            Assert.Equal(supply.LengthMm, ret.LengthMm);
-            Assert.Equal(supply.Direction, ret.Direction);
-            Assert.False(ret.ContinuesPrevious);
+            Assert.Equal(first.Size.DiameterMm, second.Size.DiameterMm);
+            Assert.Equal(first.LengthMm, second.LengthMm);
+            Assert.Equal(first.Direction, second.Direction);
+            Assert.False(second.ContinuesPrevious);
 
             // basi perfettamente allineate: nessuna traslazione lungo l'asse, solo laterale
-            Assert.Equal(0, ret.OffsetAlongMm);
-            Assert.Equal(-300, ret.OffsetSideMm);
+            Assert.Equal(0, second.OffsetAlongMm);
+            Assert.Equal(-300, second.OffsetSideMm);
 
-            // stacchi identici (stessi DN, stesso ordine), solo riposizionati
-            Assert.Equal(new double[] { 20, 16, 25 }, ret.Branches.Select(b => b.Size.DiameterMm).ToArray());
-            Assert.All(ret.Branches, b => Assert.False(b.Connect));
+            // stacchi identici (stessi DN, stesso ordine) su entrambi
+            Assert.Equal(new double[] { 20, 16, 25 }, second.Branches.Select(b => b.Size.DiameterMm).ToArray());
+            Assert.All(second.Branches, b => Assert.False(b.Connect));
 
-            // ogni circuito di ritorno a metà tra due di mandata:
-            // mandata: 60, 210, 360 → ritorno: 135, 285, 435 (le basi condividono l'origine)
-            var supplyX = supply.Branches.Select(b => b.PositionsMm[0]).ToArray();
-            var returnX = ret.Branches.Select(b => b.PositionsMm[0]).ToArray();
-            Assert.Equal((supplyX[0] + supplyX[1]) / 2, returnX[0], 6);
-            Assert.Equal((supplyX[1] + supplyX[2]) / 2, returnX[1], 6);
-            Assert.Equal(supplyX[2] + 75, returnX[2], 6);
+            // collettori scambiati: il PRIMO porta gli stacchi sfasati (135, 285, 435),
+            // il secondo quelli non sfasati (60, 210, 360); interlacciati a metà l'uno dell'altro
+            var firstX = first.Branches.Select(b => b.PositionsMm[0]).ToArray();
+            var secondX = second.Branches.Select(b => b.PositionsMm[0]).ToArray();
+            Assert.Equal(new double[] { 135, 285, 435 }, firstX);
+            Assert.Equal(new double[] { 60, 210, 360 }, secondX);
+            Assert.Equal((secondX[0] + secondX[1]) / 2, firstX[0], 6);
+            Assert.Equal((secondX[1] + secondX[2]) / 2, firstX[1], 6);
         }
 
         [Fact]
@@ -311,10 +312,10 @@ namespace SayRevit.Core.Tests
             var p = PlanWithReturn(20, 16, 25, 20);
             p.SpacingMm = 150;
             var r = p.ToParseResult();
-            var supply = r.Plan.Runs[0];
-            var ret = r.Plan.Runs[1];
+            var first = r.Plan.Runs[0];
+            var second = r.Plan.Runs[1];
 
-            Assert.Equal(supply.Branches.Count, ret.Branches.Count); // TUTTI replicati
+            Assert.Equal(first.Branches.Count, second.Branches.Count); // TUTTI replicati
             foreach (var run in r.Plan.Runs)
             {
                 foreach (var b in run.Branches)
@@ -322,11 +323,11 @@ namespace SayRevit.Core.Tests
                     Assert.InRange(b.PositionsMm[0], 1, run.LengthMm - 1);
                 }
             }
-            // 5 cm esatti: dal bordo del primo di mandata all'inizio base...
-            Assert.Equal(50, supply.Branches[0].PositionsMm[0] - 20 / 2.0);
-            // ...e dal bordo dell'ultimo di ritorno alla fine base
-            var lastReturn = ret.Branches[ret.Branches.Count - 1];
-            Assert.Equal(50, ret.LengthMm - lastReturn.PositionsMm[0] - 20 / 2.0, 6);
+            // 5 cm esatti sul primo stacco di UN collettore (il secondo, non sfasato)...
+            Assert.Equal(50, second.Branches[0].PositionsMm[0] - 20 / 2.0);
+            // ...e sull'ultimo stacco dell'ALTRO (il primo, sfasato)
+            var lastFirst = first.Branches[first.Branches.Count - 1];
+            Assert.Equal(50, first.LengthMm - lastFirst.PositionsMm[0] - 20 / 2.0, 6);
             Assert.DoesNotContain(r.Warnings, w => w.Contains("oltre la fine della base"));
         }
 

@@ -16,14 +16,6 @@ namespace SayRevit.Addin.UI
     /// </summary>
     public sealed class ManifoldPanel : Grid
     {
-        private static readonly KeyValuePair<string, DirectionKind>[] HeaderDirections =
-        {
-            new KeyValuePair<string, DirectionKind>("+X (est)", DirectionKind.PlusX),
-            new KeyValuePair<string, DirectionKind>("+Y (nord)", DirectionKind.PlusY),
-            new KeyValuePair<string, DirectionKind>("-X (ovest)", DirectionKind.MinusX),
-            new KeyValuePair<string, DirectionKind>("-Y (sud)", DirectionKind.MinusY)
-        };
-
         private static readonly KeyValuePair<string, DirectionKind>[] CircuitDirections =
         {
             new KeyValuePair<string, DirectionKind>("verso il basso", DirectionKind.Down),
@@ -44,7 +36,6 @@ namespace SayRevit.Addin.UI
         private readonly TextBox _headerDn = new TextBox();
         private readonly TextBox _spacing = new TextBox();
         private readonly TextBox _circuitLength = new TextBox();
-        private readonly ComboBox _headerDirection = new ComboBox();
         private readonly ComboBox _circuitDirection = new ComboBox();
         private readonly CheckBox _withReturn = new CheckBox();
         private readonly TextBox _returnOffset = new TextBox();
@@ -249,10 +240,6 @@ namespace SayRevit.Addin.UI
 
             panel.Children.Add(Labeled("Lunghezza circuiti (mm):", _circuitLength, 70));
 
-            foreach (var d in HeaderDirections) _headerDirection.Items.Add(d.Key);
-            _headerDirection.SelectedIndex = 0;
-            panel.Children.Add(Labeled("Direzione collettore:", _headerDirection, 120));
-
             foreach (var d in CircuitDirections) _circuitDirection.Items.Add(d.Key);
             _circuitDirection.SelectedIndex = 0;
             panel.Children.Add(Labeled("Partenza circuiti:", _circuitDirection, 130));
@@ -274,7 +261,6 @@ namespace SayRevit.Addin.UI
             _spacing.TextChanged += (s, e) => Notify();
             _circuitLength.TextChanged += (s, e) => Notify();
             _returnOffset.TextChanged += (s, e) => Notify();
-            _headerDirection.SelectionChanged += (s, e) => Notify();
             _circuitDirection.SelectionChanged += (s, e) => Notify();
 
             return panel;
@@ -426,7 +412,7 @@ namespace SayRevit.Addin.UI
             {
                 SpacingMm = ParseNumber(_spacing.Text, 150),
                 CircuitLengthMm = ParseNumber(_circuitLength.Text, 500),
-                HeaderDirection = HeaderDirections[Math.Max(_headerDirection.SelectedIndex, 0)].Value,
+                HeaderDirection = DirectionKind.PlusX, // direzione fissa: +X (est)
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
                 PipeTypeName = _pipeType.SelectedItem as string,
                 WithReturn = _withReturn.IsChecked == true,
@@ -461,7 +447,6 @@ namespace SayRevit.Addin.UI
                     : string.Empty;
                 _spacing.Text = settings.ManifoldSpacingMm.ToString("0.##", CultureInfo.InvariantCulture);
                 _circuitLength.Text = settings.ManifoldCircuitLengthMm.ToString("0.##", CultureInfo.InvariantCulture);
-                _headerDirection.SelectedIndex = Math.Max(0, IndexOf(HeaderDirections, settings.ManifoldHeaderDirection));
                 _circuitDirection.SelectedIndex = Math.Max(0, IndexOf(CircuitDirections, settings.ManifoldCircuitDirection));
 
                 _withReturn.IsChecked = settings.ManifoldWithReturn;
@@ -490,7 +475,6 @@ namespace SayRevit.Addin.UI
             settings.ManifoldHeaderDnMm = plan.HeaderDnMm ?? 0;
             settings.ManifoldSpacingMm = plan.SpacingMm;
             settings.ManifoldCircuitLengthMm = plan.CircuitLengthMm;
-            settings.ManifoldHeaderDirection = plan.HeaderDirection.ToString();
             settings.ManifoldCircuitDirection = plan.CircuitDirection.ToString();
             settings.ManifoldCircuits = plan.CircuitsToString();
             settings.ManifoldPipeTypeName = plan.PipeTypeName ?? string.Empty;

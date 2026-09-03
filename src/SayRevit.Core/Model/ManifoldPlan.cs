@@ -197,8 +197,11 @@ namespace SayRevit.Core.Model
 
             var run = MakeHeaderRun(headerDn);
             var positions = CircuitPositionsMm();
+            // Collettori scambiati: il PRIMO collettore porta gli stacchi sfasati di mezzo
+            // interasse, il ritorno quelli non sfasati.
+            var firstShift = WithReturn ? SpacingMm / 2.0 : 0;
             for (var i = 0; i < circuits.Count; i++)
-                run.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, positions[i]));
+                run.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, positions[i] + firstShift));
 
             var plan = new MepPlan { SourceText = Summary() };
             plan.Runs.Add(run);
@@ -210,9 +213,9 @@ namespace SayRevit.Core.Model
             if (WithReturn)
             {
                 plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions));
-                result.Notes.Add("Collettore di ritorno: base identica e perfettamente allineata alla mandata, a " +
-                                 MepSize.Fmt(ReturnOffsetMm) + " mm; stacchi replicati e spostati di mezzo interasse, " +
-                                 "ognuno a metà tra due di mandata.");
+                result.Notes.Add("Due collettori scambiati: basi identiche e allineate a " + MepSize.Fmt(ReturnOffsetMm) +
+                                 " mm; il primo porta gli stacchi sfasati di mezzo interasse, il secondo quelli non sfasati, " +
+                                 "interlacciati a metà l'uno dell'altro.");
             }
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
             {
@@ -294,23 +297,23 @@ namespace SayRevit.Core.Model
         }
 
         /// <summary>
-        /// Collettore di ritorno: base IDENTICA e perfettamente allineata alla mandata (nessuna
+        /// Secondo collettore: base IDENTICA e perfettamente allineata alla prima (nessuna
         /// traslazione lungo l'asse), su un asse parallelo a <see cref="ReturnOffsetMm"/>.
-        /// TUTTI gli stacchi vengono replicati dalla mandata (stessi DN, stesso ordine) e spostati
-        /// di mezzo interasse; le basi, allungate di s/2 in <see cref="HeaderLengthMm"/>, rispettano
-        /// i 5 cm sul primo stacco della mandata e sull'ultimo del ritorno, quindi nessuno stacco
-        /// cade mai fuori dalla base.
+        /// TUTTI gli stacchi vengono replicati (stessi DN, stesso ordine) NON sfasati: lo
+        /// sfasamento di mezzo interasse sta sul primo collettore (collettori scambiati).
+        /// Le basi, allungate di s/2 in <see cref="HeaderLengthMm"/>, rispettano i 5 cm sul
+        /// primo stacco di questo collettore e sull'ultimo del primo: nessuno stacco cade
+        /// mai fuori dalla base.
         /// </summary>
         private MepRun MakeReturnRun(double headerDn, List<ManifoldCircuit> circuits, List<double> supplyPositions)
         {
             var ret = MakeHeaderRun(headerDn);
 
-            var shift = SpacingMm / 2.0;
             for (var i = 0; i < circuits.Count; i++)
-                ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i] + shift));
+                ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i]));
 
             ret.OffsetAlongMm = 0;              // basi perfettamente allineate
-            ret.OffsetSideMm = -ReturnOffsetMm; // alla destra della direzione della mandata
+            ret.OffsetSideMm = -ReturnOffsetMm; // alla destra della direzione del primo
             return ret;
         }
 
