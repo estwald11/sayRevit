@@ -1,12 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    Versione di Revit di destinazione: dotnet build -p:RevitVersion=2024|2025|2026
-    2024 -> .NET Framework 4.8 ; 2025/2026 -> .NET 8 (Windows)
+    Versione di Revit di destinazione: dotnet build -p:RevitVersion=2024|2025|2026|2027
+    2024 -> .NET Framework 4.8 ; 2025/2026 -> .NET 8 (Windows) ; 2027 -> .NET 10 (Windows)
   -->
   <PropertyGroup>
     <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
     <TargetFramework Condition="'$(RevitVersion)' == '2024'">net48</TargetFramework>
-    <TargetFramework Condition="'$(RevitVersion)' != '2024'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' == '2025' Or '$(RevitVersion)' == '2026'">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="'$(RevitVersion)' == '2027'">net10.0-windows</TargetFramework>
     <!-- L'interfaccia WPF è costruita da codice (nessun XAML): bastano i riferimenti alle librerie,
          così il progetto si compila anche su Linux/macOS senza l'SDK WindowsDesktop. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>

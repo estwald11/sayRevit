@@ -6,7 +6,7 @@
   .\scripts\install.ps1 -RevitVersion 2024 -Configuration Release
 #>
 param(
-    [ValidateSet("2024", "2025", "2026")]
+    [ValidateSet("2024", "2025", "2026", "2027")]
     [string]$RevitVersion = "2025",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release"

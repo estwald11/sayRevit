@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("2024", "2025", "2026")]
+    [ValidateSet("2024", "2025", "2026", "2027")]
     [string]$RevitVersion = "2025"
 )
 $addins = Join-Path $env:APPDATA "Autodesk\Revit\Addins\$RevitVersion"

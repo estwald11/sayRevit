@@ -83,13 +83,13 @@ direzione stacchi verso l'alto (tubazioni) o laterale (canali), stacchi distribu
 
 ## Requisiti e installazione
 
-- Windows con Autodesk Revit **2024** (.NET Framework 4.8), **2025** o **2026** (.NET 8).
-- [.NET SDK 8](https://dotnet.microsoft.com/download) per compilare.
+- Windows con Autodesk Revit **2024** (.NET Framework 4.8), **2025** o **2026** (.NET 8), **2027** (.NET 10).
+- [.NET SDK 8](https://dotnet.microsoft.com/download) per compilare (SDK .NET 10 per Revit 2027).
 
 ```powershell
 git clone <repo> sayRevit
 cd sayRevit
-.\scripts\install.ps1 -RevitVersion 2025     # oppure 2024 / 2026
+.\scripts\install.ps1 -RevitVersion 2025     # oppure 2024 / 2026 / 2027
 ```
 
 Lo script compila (`dotnet build -p:RevitVersion=…`), copia i file in
@@ -120,7 +120,7 @@ caricata solo quando si seleziona questa modalità: senza chiave si lavora norma
 sayRevit.sln
 src/SayRevit.Core     modello (MepPlan), parser a regole IT/EN, formattatore anteprima  [netstandard2.0, nessuna dipendenza]
 src/SayRevit.Claude   parser Claude con output strutturati                            [netstandard2.0, SDK Anthropic]
-src/SayRevit.Addin    add-in Revit: ribbon, finestra WPF, lettura catalogo, costruzione elementi [net48 / net8.0-windows]
+src/SayRevit.Addin    add-in Revit: ribbon, finestra WPF, lettura catalogo, costruzione elementi [net48 / net8.0-windows / net10.0-windows]
 tests/                test xunit del parser e della conversione JSON
 scripts/              install.ps1 / uninstall.ps1
 ```
@@ -134,7 +134,7 @@ Test: `dotnet test` (32 test, eseguibili su qualsiasi sistema operativo).
   raccordo a T (o presa) nelle preferenze di instradamento lo stacco resta scollegato (segnalato).
 - Cambio di direzione e di dimensione nello stesso punto tra due tratti: Revit non crea un gomito
   con diametri diversi; si consiglia un tratto intermedio.
-- Il codice Revit è stato compilato contro le API 2024/2025/2026 ma va verificato nel proprio
+- Il codice Revit è stato compilato contro le API 2024/2025/2026/2027 ma va verificato nel proprio
   modello (famiglie e preferenze di instradamento variano da progetto a progetto): usare sempre
   l'anteprima e, se necessario, *Annulla* di Revit (la creazione è un'unica transazione).
 - In Revit 2024 (.NET Framework) l'SDK Anthropic porta con sé `System.Text.Json` e altre librerie
