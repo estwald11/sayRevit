@@ -151,6 +151,13 @@ sessione e l'altra.
 
 - Windows con Autodesk Revit **2024** (.NET Framework 4.8), **2025** o **2026** (.NET 8), **2027** (.NET 10).
 - [.NET SDK 8](https://dotnet.microsoft.com/download) per compilare (SDK .NET 10 per Revit 2027).
+- Per la modalità Collettore: il template proprietario **`Revit template 2026.rfa`**, da cui
+  provengono i tipi di tubazione e le famiglie usate (tra cui i fondelli
+  `ATZ_INOX-WELD_Enddeckel` e `ATZ_C-STAHL-WELD_5_Enddeckel`). È un file proprietario e
+  **non è incluso in questo repository** (pubblico): va procurato a parte e **non va
+  caricato su GitHub** — il `.gitignore` esclude i file `.rfa`/`.rte`/`.rvt` per evitare
+  commit accidentali. Senza il template l'add-in funziona comunque, ma segnala le famiglie
+  mancanti e lascia le estremità dei collettori senza fondelli.
 
 ```powershell
 git clone <repo> sayRevit
