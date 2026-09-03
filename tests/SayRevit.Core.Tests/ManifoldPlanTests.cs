@@ -31,12 +31,15 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void DnCollettoreAutomatico_PerEquivalenzaDiArea()
+        public void DnCollettoreAutomatico_DallaFormula()
         {
-            // √(20² + 20² + 20² + 20²) = 40 → DN40 esatto nella serie
-            Assert.Equal(40, Plan(20, 20, 20, 20).AutoHeaderDnMm);
-            // √(16² + 16² + 16²) ≈ 27,7 → arrotondato al DN commerciale superiore
-            Assert.Equal(32, Plan(16, 16, 16).AutoHeaderDnMm);
+            // D = √(1,5·ΣS/0,785) con S = 0,785·dn² → D = √(1,5·Σdn²)
+            // 4×DN20: √(1,5·1600) ≈ 49,0 mm
+            Assert.Equal(48.99, Plan(20, 20, 20, 20).ComputedHeaderDnMm, 2);
+            // arrotondato al DN commerciale superiore
+            Assert.Equal(50, Plan(20, 20, 20, 20).AutoHeaderDnMm);
+            // 3×DN16: √(1,5·768) ≈ 33,9 → DN40
+            Assert.Equal(40, Plan(16, 16, 16).AutoHeaderDnMm);
         }
 
         [Fact]
@@ -51,12 +54,31 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void LunghezzaEPosizioni_DerivanoDaInteresseEMargini()
+        public void LaBaseSporgeDi50mmDaiBordiDelPrimoEUltimoCircuito()
         {
+            // Bordo del circuito = posizione ± DN/2: la base parte 50 mm prima del bordo
+            // del primo (50 + 20/2 = 60 mm prima dell'asse) e finisce 50 mm dopo l'ultimo.
             var p = Plan(20, 20, 20);
-            p.SpacingMm = 200; // margine = metà interasse = 100
-            Assert.Equal(100 + 100 + 2 * 200, p.HeaderLengthMm);
-            Assert.Equal(new double[] { 100, 300, 500 }, p.CircuitPositionsMm().ToArray());
+            p.SpacingMm = 200;
+            Assert.Equal(50 + 10 + 2 * 200 + 10 + 50, p.HeaderLengthMm); // 520
+            Assert.Equal(new double[] { 60, 260, 460 }, p.CircuitPositionsMm().ToArray());
+        }
+
+        [Fact]
+        public void SporgenzaConDnDiversi_UsaIlBordoDiCiascunEstremo()
+        {
+            var p = Plan(50, 20, 32); // primo DN50, ultimo DN32
+            p.SpacingMm = 150;
+            Assert.Equal(50 + 25 + 2 * 150 + 16 + 50, p.HeaderLengthMm); // 441
+            Assert.Equal(new double[] { 75, 225, 375 }, p.CircuitPositionsMm().ToArray());
+        }
+
+        [Fact]
+        public void UnSoloCircuito_BaseLungaDnPiu100()
+        {
+            var p = Plan(40);
+            Assert.Equal(40 + 100, p.HeaderLengthMm);
+            Assert.Equal(new double[] { 70 }, p.CircuitPositionsMm().ToArray());
         }
 
         [Fact]
@@ -77,8 +99,8 @@ namespace SayRevit.Core.Tests
                 Assert.Equal(800, b.LengthMm);
                 Assert.Single(b.PositionsMm);
             });
-            Assert.Equal(75, run.Branches[0].PositionsMm[0]);
-            Assert.Equal(225, run.Branches[1].PositionsMm[0]);
+            Assert.Equal(60, run.Branches[0].PositionsMm[0]);   // 50 + 20/2
+            Assert.Equal(210, run.Branches[1].PositionsMm[0]);  // 60 + 150
         }
 
         [Fact]

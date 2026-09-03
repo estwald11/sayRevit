@@ -227,7 +227,7 @@ namespace SayRevit.Addin.UI
             _autoHeaderDn.IsChecked = true;
             _autoHeaderDn.VerticalAlignment = VerticalAlignment.Center;
             _autoHeaderDn.Margin = new Thickness(0, 0, 12, 6);
-            _autoHeaderDn.ToolTip = "Calcolato per equivalenza di area sui circuiti e arrotondato al DN commerciale superiore.";
+            _autoHeaderDn.ToolTip = "D = √(1,5·(S₁+S₂+…)/0,785) sulle sezioni dei circuiti, arrotondato al DN commerciale superiore.";
             _autoHeaderDn.Checked += (s, e) => { _headerDn.IsEnabled = false; Notify(); };
             _autoHeaderDn.Unchecked += (s, e) => { _headerDn.IsEnabled = true; Notify(); };
             panel.Children.Add(_autoHeaderDn);

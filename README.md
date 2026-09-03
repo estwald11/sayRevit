@@ -100,11 +100,13 @@ scheda parametrica: niente linguaggio naturale, si compilano dei campi. Questa s
 - **Circuiti**: si inserisce un circuito per volta indicandone il **DN**. Il pulsante **+**
   aggiunge una riga (lo fa anche **Invio** dal campo DN); **✕** la rimuove. Le righe si
   numerano da sole `C1`, `C2`, … e quelle lasciate vuote vengono ignorate.
-- **DN collettore**: con *automatico* attivo è calcolato per equivalenza di area
-  (√Σdn²) e arrotondato al DN commerciale superiore, così il collettore non è mai più
-  piccolo della somma delle sezioni derivate; togliendo la spunta lo si impone a mano.
-- **Interasse**: distanza tra due circuiti consecutivi. Il collettore si estende di mezzo
-  interasse oltre il primo e l'ultimo circuito.
+- **DN collettore**: con *automatico* attivo è calcolato con la formula
+  **D = √(1,5·(S₁+S₂+…)/0,785)** sulle sezioni dei circuiti (con S = 0,785·dn² si
+  semplifica in √(1,5·Σdn²)) e arrotondato al DN commerciale superiore; l'anteprima
+  mostra sia il valore della formula sia il DN scelto. Togliendo la spunta lo si impone a mano.
+- **Interasse**: distanza tra due circuiti consecutivi. La base sporge di **5 cm oltre il
+  bordo** del primo e dell'ultimo circuito (bordo = asse ± DN/2), quindi con DN d'estremità
+  diversi le due sporgenze d'asse sono diverse.
 - **Lunghezza circuiti**, **direzione collettore** (+X/+Y/−X/−Y) e **partenza circuiti**
   (basso, alto, sinistra, destra, alternati).
 A differenza della modalità testuale, **i circuiti non vengono raccordati**: il collettore

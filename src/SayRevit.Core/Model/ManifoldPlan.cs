@@ -49,14 +49,17 @@ namespace SayRevit.Core.Model
         /// <summary>DN del collettore in mm; null o 0 = calcolato automaticamente dai circuiti.</summary>
         public double? HeaderDnMm { get; set; }
 
+        /// <summary>Fattore di maggiorazione della formula del collettore: D = √(1,5·ΣS/0,785).</summary>
+        public const double HeaderSizingFactor = 1.5;
+
         /// <summary>Interasse tra due circuiti consecutivi (mm).</summary>
         public double SpacingMm { get; set; } = 150;
 
         /// <summary>Lunghezza di ogni circuito a partire dal collettore (mm).</summary>
         public double CircuitLengthMm { get; set; } = 500;
 
-        /// <summary>Tratto di collettore oltre il primo e l'ultimo circuito (mm); null = metà interasse.</summary>
-        public double? EndMarginMm { get; set; }
+        /// <summary>Sporgenza del collettore oltre il BORDO del primo e dell'ultimo circuito (mm).</summary>
+        public double OverhangMm { get; set; } = 50;
 
         public DirectionKind HeaderDirection { get; set; } = DirectionKind.PlusX;
 
@@ -71,24 +74,24 @@ namespace SayRevit.Core.Model
             return Circuits.Where(c => c != null && c.IsValid).ToList();
         }
 
-        /// <summary>Margine effettivo alle estremità: mai sotto 10 mm, altrimenti lo stacco cadrebbe sul bordo.</summary>
-        public double EffectiveEndMarginMm
-        {
-            get { return Math.Max(EndMarginMm ?? SpacingMm / 2.0, 10); }
-        }
-
         /// <summary>
-        /// DN del collettore calcolato per equivalenza di area (√Σdn²) e arrotondato al DN commerciale
-        /// superiore: il collettore non risulta mai più piccolo della somma delle sezioni derivate.
+        /// Diametro grezzo dalla formula D = √(1,5·(S₁+S₂+…)/0,785): con S = 0,785·dn²
+        /// si semplifica in √(1,5·Σdn²).
         /// </summary>
-        public double AutoHeaderDnMm
+        public double ComputedHeaderDnMm
         {
             get
             {
                 var circuits = ValidCircuits();
                 if (circuits.Count == 0) return 0;
-                return SnapUpToDn(Math.Sqrt(circuits.Sum(c => c.DnMm * c.DnMm)));
+                return Math.Sqrt(HeaderSizingFactor * circuits.Sum(c => c.DnMm * c.DnMm));
             }
+        }
+
+        /// <summary>Diametro della formula arrotondato al DN commerciale superiore (mai sottodimensionato).</summary>
+        public double AutoHeaderDnMm
+        {
+            get { return ComputedHeaderDnMm <= 0 ? 0 : SnapUpToDn(ComputedHeaderDnMm); }
         }
 
         public double EffectiveHeaderDnMm
@@ -96,13 +99,19 @@ namespace SayRevit.Core.Model
             get { return HeaderDnMm.HasValue && HeaderDnMm.Value > 0 ? HeaderDnMm.Value : AutoHeaderDnMm; }
         }
 
+        /// <summary>
+        /// La base parte 5 cm (OverhangMm) prima del bordo del primo circuito e finisce 5 cm dopo
+        /// il bordo dell'ultimo; il bordo è posizione ± DN/2.
+        /// </summary>
         public double HeaderLengthMm
         {
             get
             {
-                var n = ValidCircuits().Count;
-                if (n == 0) return 0;
-                return 2 * EffectiveEndMarginMm + (n - 1) * SpacingMm;
+                var circuits = ValidCircuits();
+                if (circuits.Count == 0) return 0;
+                var first = circuits[0].DnMm / 2.0;
+                var last = circuits[circuits.Count - 1].DnMm / 2.0;
+                return OverhangMm + first + (circuits.Count - 1) * SpacingMm + last + OverhangMm;
             }
         }
 
@@ -110,9 +119,10 @@ namespace SayRevit.Core.Model
         public List<double> CircuitPositionsMm()
         {
             var list = new List<double>();
-            var n = ValidCircuits().Count;
-            var margin = EffectiveEndMarginMm;
-            for (var i = 0; i < n; i++) list.Add(margin + i * SpacingMm);
+            var circuits = ValidCircuits();
+            if (circuits.Count == 0) return list;
+            var start = OverhangMm + circuits[0].DnMm / 2.0;
+            for (var i = 0; i < circuits.Count; i++) list.Add(start + i * SpacingMm);
             return list;
         }
 
@@ -178,7 +188,10 @@ namespace SayRevit.Core.Model
             var result = new ParseResult { Success = true, Plan = plan };
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
             if (!HeaderDnMm.HasValue || HeaderDnMm.Value <= 0)
-                result.Notes.Add("DN del collettore calcolato per equivalenza di area: DN" + MepSize.Fmt(headerDn) + ".");
+                result.Notes.Add("DN collettore dalla formula D = √(1,5·ΣS/0,785): " + MepSize.Fmt(ComputedHeaderDnMm) +
+                                 " mm → DN" + MepSize.Fmt(headerDn) + " (arrotondato alla serie commerciale).");
+            result.Notes.Add("Base lunga " + MepSize.Fmt(HeaderLengthMm) + " mm: sporge di " + MepSize.Fmt(OverhangMm) +
+                             " mm dal bordo del primo e dell'ultimo circuito.");
 
             var oversized = circuits
                 .Select((c, i) => new { c, i })
