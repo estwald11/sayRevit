@@ -328,7 +328,10 @@ namespace SayRevit.Addin.Revit
                 _report.Fittings++;
 
                 if (Math.Abs(capConn.Radius - target.Radius) > TolFt / 5)
-                    _report.Warnings.Add(label + "misura del fondello non adattata automaticamente: verifica il DN nella famiglia.");
+                    _report.Warnings.Add(label + "misura non adattata: fondello Ø" +
+                                         MepSize.Fmt(Units.FtToMm(capConn.Radius * 2)) + " mm su tubo Ø" +
+                                         MepSize.Fmt(Units.FtToMm(target.Radius * 2)) +
+                                         " mm. Indica il nome del parametro diametro della famiglia per aggiungerlo alla ricerca.");
             }
             catch (Exception ex)
             {
@@ -352,40 +355,86 @@ namespace SayRevit.Addin.Revit
         }
 
         /// <summary>
-        /// Adatta la misura del fondello al tubo: prima provando il raggio del connettore,
-        /// poi cercando un parametro d'istanza dal nome riconducibile al diametro.
+        /// Adatta la misura del fondello al tubo. Ogni tentativo viene VERIFICATO sul raggio del
+        /// connettore dopo una rigenerazione: ci si ferma solo quando la misura corrisponde davvero.
+        /// Ordine: raggio del connettore, poi ogni parametro d'istanza dal nome riconducibile al
+        /// diametro — in piedi se è una Lunghezza, in millimetri se è un numero puro (es. "DN" = 50).
         /// </summary>
         private void TrySizeCap(FamilyInstance cap, Connector target)
         {
+            var wantRadius = target.Radius;
+            if (CapRadiusMatches(cap, wantRadius)) return;
+
+            // 1) raggio del connettore
             try
             {
                 var capConn = GetCapConnector(cap);
-                if (capConn != null && Math.Abs(capConn.Radius - target.Radius) > 1e-9)
-                {
-                    capConn.Radius = target.Radius;
-                    return;
-                }
+                if (capConn != null) capConn.Radius = wantRadius;
+                _doc.Regenerate();
             }
             catch
             {
                 // raggio guidato da parametro: si passa alla ricerca per nome
             }
+            if (CapRadiusMatches(cap, wantRadius)) return;
 
+            // 2) parametri d'istanza
             var keywords = new[] { "dn", "nominal", "durchmesser", "diametro", "diameter", "nennweite" };
+            var dnMm = Units.FtToMm(wantRadius * 2);
             foreach (Parameter p in cap.Parameters)
             {
-                if (p.IsReadOnly || p.StorageType != StorageType.Double) continue;
+                if (p == null || p.IsReadOnly) continue;
                 var name = TextUtil.Fold(p.Definition?.Name ?? string.Empty);
-                if (!keywords.Any(k => name.Contains(k))) continue;
+                var match = keywords.Any(k => name.Contains(k)) || name == "d" || name == "d1";
+                if (!match) continue;
                 try
                 {
-                    p.Set(target.Radius * 2);
-                    return;
+                    if (p.StorageType == StorageType.Double)
+                    {
+                        // Lunghezza → unità interne (piedi); numero puro (es. "DN") → valore in mm
+                        if (IsLengthParam(p)) p.Set(wantRadius * 2);
+                        else p.Set(dnMm);
+                    }
+                    else if (p.StorageType == StorageType.Integer)
+                    {
+                        p.Set((int)Math.Round(dnMm));
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                    _doc.Regenerate();
                 }
                 catch
                 {
-                    // parametro non impostabile: si prova il successivo
+                    continue; // parametro non impostabile: si prova il successivo
                 }
+                if (CapRadiusMatches(cap, wantRadius)) return;
+            }
+        }
+
+        private bool CapRadiusMatches(FamilyInstance cap, double wantRadius)
+        {
+            try
+            {
+                var c = GetCapConnector(cap);
+                return c != null && Math.Abs(c.Radius - wantRadius) < TolFt / 5; // 1 mm
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsLengthParam(Parameter p)
+        {
+            try
+            {
+                return p.Definition != null && p.Definition.GetDataType() == SpecTypeId.Length;
+            }
+            catch
+            {
+                return true; // in dubbio, trattalo come lunghezza (comportamento precedente)
             }
         }
 
