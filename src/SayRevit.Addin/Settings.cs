@@ -10,9 +10,8 @@ namespace SayRevit.Addin
     {
         public string ParserMode { get; set; } = "rules";       // rules | claude
         public string ClaudeModel { get; set; } = "claude-opus-5";
+        /// <summary>Quota del collettore/tubazione sopra il livello (mm), quando il testo non la indica.</summary>
         public double DefaultElevationMm { get; set; } = 2500;
-        public string StartMode { get; set; } = "origin";       // origin | pick
-        public bool UsePickedZ { get; set; }
         public string LastText { get; set; } = string.Empty;
         /// <summary>Nome del tipo di tubazione scelto nella finestra; vuoto = automatico.</summary>
         public string PipeTypeName { get; set; } = string.Empty;
@@ -43,9 +42,12 @@ namespace SayRevit.Addin
         public string ManifoldButterflyValveFamily { get; set; } = string.Empty;
         /// <summary>PN preferito nei nomi dei tipi delle valvole; 0 = indifferente.</summary>
         public double ManifoldValvePnBar { get; set; } = 16;
+        /// <summary>Distanza dal bordo esterno del collettore al centro della valvola (mm).</summary>
         public double ManifoldValveDistanceMm { get; set; } = 150;
         /// <summary>Rotazione della boax attorno all'asse del tubo (gradi).</summary>
         public double ManifoldButterflyRollDeg { get; set; } = 90;
+        /// <summary>Rotazione della valvola a sfera attorno all'asse del tubo (gradi).</summary>
+        public double ManifoldBallRollDeg { get; set; }
 
         public static string FilePath
         {
@@ -85,8 +87,6 @@ namespace SayRevit.Addin
                 case "ParserMode": s.ParserMode = v; break;
                 case "ClaudeModel": s.ClaudeModel = v; break;
                 case "DefaultElevationMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) s.DefaultElevationMm = d; break;
-                case "StartMode": s.StartMode = v; break;
-                case "UsePickedZ": s.UsePickedZ = v == "true"; break;
                 case "LastText": s.LastText = v.Replace("\\n", "\n"); break;
                 case "PipeTypeName": s.PipeTypeName = v; break;
                 case "ManifoldMode": s.ManifoldMode = v == "true"; break;
@@ -106,6 +106,7 @@ namespace SayRevit.Addin
                 case "ManifoldValvePnBar": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var pn)) s.ManifoldValvePnBar = pn; break;
                 case "ManifoldValveDistanceMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var vd)) s.ManifoldValveDistanceMm = vd; break;
                 case "ManifoldButterflyRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var br)) s.ManifoldButterflyRollDeg = br; break;
+                case "ManifoldBallRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var sr)) s.ManifoldBallRollDeg = sr; break;
             }
             }
         }
@@ -120,8 +121,6 @@ namespace SayRevit.Addin
                     "ParserMode=" + ParserMode,
                     "ClaudeModel=" + ClaudeModel,
                     "DefaultElevationMm=" + DefaultElevationMm.ToString(CultureInfo.InvariantCulture),
-                    "StartMode=" + StartMode,
-                    "UsePickedZ=" + (UsePickedZ ? "true" : "false"),
                     "LastText=" + (LastText ?? string.Empty).Replace("\r", string.Empty).Replace("\n", "\\n"),
                     "PipeTypeName=" + (PipeTypeName ?? string.Empty),
                     "ManifoldMode=" + (ManifoldMode ? "true" : "false"),
@@ -140,7 +139,8 @@ namespace SayRevit.Addin
                     "ManifoldButterflyValveFamily=" + (ManifoldButterflyValveFamily ?? string.Empty),
                     "ManifoldValvePnBar=" + ManifoldValvePnBar.ToString(CultureInfo.InvariantCulture),
                     "ManifoldValveDistanceMm=" + ManifoldValveDistanceMm.ToString(CultureInfo.InvariantCulture),
-                    "ManifoldButterflyRollDeg=" + ManifoldButterflyRollDeg.ToString(CultureInfo.InvariantCulture)
+                    "ManifoldButterflyRollDeg=" + ManifoldButterflyRollDeg.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldBallRollDeg=" + ManifoldBallRollDeg.ToString(CultureInfo.InvariantCulture)
                 };
                 File.WriteAllLines(FilePath, lines);
             }

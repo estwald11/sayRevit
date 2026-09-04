@@ -26,10 +26,6 @@ namespace SayRevit.Addin.UI
         private readonly TextBlock _title = new TextBlock();
         private readonly ComboBox _parserMode = new ComboBox();
         private readonly ComboBox _pipeType = new ComboBox();
-        private readonly ComboBox _level = new ComboBox();
-        private readonly TextBox _elevation = new TextBox();
-        private readonly ComboBox _startMode = new ComboBox();
-        private readonly CheckBox _usePickedZ = new CheckBox();
         private readonly TextBox _claudeModel = new TextBox();
         private readonly TextBox _preview = new TextBox();
         private readonly TextBlock _status = new TextBlock();
@@ -50,8 +46,6 @@ namespace SayRevit.Addin.UI
 
         /// <summary>Il collettore parametrico dell'ultima anteprima (per l'interasse automatico, risolto in Revit).</summary>
         public ManifoldPlan ManifoldPlan { get; private set; }
-
-        public string SelectedLevel => _level.SelectedItem as string;
 
         /// <summary>
         /// Tipo di tubazione scelto per la modalità testuale; null con "Automatico".
@@ -76,6 +70,16 @@ namespace SayRevit.Addin.UI
 
             Content = BuildLayout();
             LoadSettings();
+            // Esc chiude senza creare (il pulsante "Chiudi" non c'è più)
+            PreviewKeyDown += (s, e) =>
+            {
+                if (e.Key == Key.Escape)
+                {
+                    e.Handled = true;
+                    DialogResult = false;
+                    Close();
+                }
+            };
             Loaded += (s, e) =>
             {
                 if (ManifoldMode)
@@ -183,25 +187,6 @@ namespace SayRevit.Addin.UI
             _pipeType.SelectedIndex = 0;
             _pipeType.SelectionChanged += (s, e) => UpdatePipeTypeTooltip();
 
-            options.Children.Add(Labeled("Livello:", _level, 160));
-            foreach (var l in _catalog.Levels) _level.Items.Add(l);
-            if (_catalog.ActiveLevel != null && _level.Items.Contains(_catalog.ActiveLevel)) _level.SelectedItem = _catalog.ActiveLevel;
-            else if (_level.Items.Count > 0) _level.SelectedIndex = 0;
-            _level.ToolTip = "Livello usato se il testo non ne indica uno.";
-
-            options.Children.Add(Labeled("Quota predefinita (mm):", _elevation, 80));
-            _elevation.ToolTip = "Quota rispetto al livello quando il testo non la indica.";
-
-            options.Children.Add(Labeled("Punto iniziale:", _startMode, 190));
-            _startMode.Items.Add("Origine del progetto");
-            _startMode.Items.Add("Scegli nel modello (dopo Crea)");
-            _startMode.SelectionChanged += (s, e) => _usePickedZ.IsEnabled = _startMode.SelectedIndex == 1;
-
-            _usePickedZ.Content = "Usa la Z del punto scelto";
-            _usePickedZ.VerticalAlignment = VerticalAlignment.Center;
-            _usePickedZ.Margin = new Thickness(0, 6, 12, 0);
-            options.Children.Add(_usePickedZ);
-
             Grid.SetRow(options, 2);
             root.Children.Add(options);
 
@@ -217,21 +202,9 @@ namespace SayRevit.Addin.UI
             _create.Margin = new Thickness(0, 0, 8, 0);
             _create.IsEnabled = false;
             _create.FontWeight = FontWeights.SemiBold;
+            _create.ToolTip = "Chiude la finestra e chiede il punto di partenza nel modello (Esc annulla).";
             _create.Click += (s, e) => Confirm();
             buttons.Children.Add(_create);
-
-            var close = new Button { Content = "Chiudi", Padding = new Thickness(12, 5, 12, 5), IsCancel = true };
-            buttons.Children.Add(close);
-
-            var catalogInfo = new TextBlock
-            {
-                Foreground = Brushes.Gray,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(16, 0, 0, 0),
-                Text = "Nel progetto: " + _catalog.PipeTypes.Count + " tipi tubazione, " + _catalog.DuctTypes.Count + " tipi canale, " +
-                       _catalog.PipingSystems.Count + "+" + _catalog.DuctSystems.Count + " sistemi, " + _catalog.Levels.Count + " livelli"
-            };
-            buttons.Children.Add(catalogInfo);
             Grid.SetRow(buttons, 3);
             root.Children.Add(buttons);
 
@@ -343,10 +316,6 @@ namespace SayRevit.Addin.UI
             _parserMode.SelectedIndex = _settings.ParserMode == "claude" ? 1 : 0;
             _claudeModel.Text = _settings.ClaudeModel;
             _claudeModel.IsEnabled = _parserMode.SelectedIndex == 1;
-            _elevation.Text = _settings.DefaultElevationMm.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            _startMode.SelectedIndex = _settings.StartMode == "pick" ? 1 : 0;
-            _usePickedZ.IsChecked = _settings.UsePickedZ;
-            _usePickedZ.IsEnabled = _startMode.SelectedIndex == 1;
             _input.Text = string.IsNullOrWhiteSpace(_settings.LastText) ? "una tubazione DN200 lunga 10 m con 3 stacchi DN15" : _settings.LastText;
 
             var storedType = _pipeType.Items.IndexOf(_settings.PipeTypeName);
@@ -362,10 +331,6 @@ namespace SayRevit.Addin.UI
         {
             _settings.ParserMode = _parserMode.SelectedIndex == 1 ? "claude" : "rules";
             _settings.ClaudeModel = string.IsNullOrWhiteSpace(_claudeModel.Text) ? "claude-opus-5" : _claudeModel.Text.Trim();
-            if (double.TryParse(_elevation.Text.Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var q))
-                _settings.DefaultElevationMm = q;
-            _settings.StartMode = _startMode.SelectedIndex == 1 ? "pick" : "origin";
-            _settings.UsePickedZ = _usePickedZ.IsChecked == true;
             _settings.LastText = _input.Text;
             _settings.PipeTypeName = SelectedPipeType ?? string.Empty;
             _settings.ManifoldMode = ManifoldMode;

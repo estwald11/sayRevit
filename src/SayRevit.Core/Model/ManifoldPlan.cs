@@ -139,14 +139,44 @@ namespace SayRevit.Core.Model
         /// <summary>PN preferito quando i nomi dei tipi lo dichiarano (0 = indifferente).</summary>
         public double ValvePnBar { get; set; } = 16;
 
-        /// <summary>Distanza dall'asse del collettore al centro della valvola, lungo lo stacco (mm).</summary>
+        /// <summary>
+        /// Distanza dal BORDO esterno del collettore al centro della valvola, lungo lo stacco (mm).
+        /// La distanza dall'asse, quella che serve a costruire, è questa più il raggio esterno
+        /// della base (<see cref="HeaderOuterRadiusMm"/>): così il valore non dipende dal DN
+        /// che la formula assegna al collettore.
+        /// </summary>
         public double ValveDistanceMm { get; set; } = 150;
+
+        /// <summary>Distanza dall'asse del collettore al centro della valvola (mm): bordo + raggio esterno.</summary>
+        public double ValveAxisDistanceMm
+        {
+            get { return HeaderOuterRadiusMm + ValveDistanceMm; }
+        }
+
+        /// <summary>
+        /// Raggio esterno della base (mm): dal diametro esterno della misura scelta nel tipo;
+        /// senza dati sul tipo, un'approssimazione DN/2 + 5 mm.
+        /// </summary>
+        public double HeaderOuterRadiusMm
+        {
+            get
+            {
+                var dn = EffectiveHeaderDnMm;
+                if (dn <= 0) return 0;
+                var size = HeaderSizeCandidates.FirstOrDefault(c => c != null && Math.Abs(c.NominalMm - dn) < 0.001);
+                if (size != null && size.OuterMm > 0) return size.OuterMm / 2.0;
+                return dn / 2.0 + 5;
+            }
+        }
 
         /// <summary>
         /// Rotazione della boax attorno all'asse del tubo (gradi). A 0° lo Z della famiglia (la
         /// leva, nella boax) guarda lungo il collettore; a 90° guarda di traverso.
         /// </summary>
         public double ButterflyRollDegrees { get; set; } = 90;
+
+        /// <summary>Rotazione della valvola a sfera attorno all'asse del tubo (gradi), stessa convenzione della boax.</summary>
+        public double BallRollDegrees { get; set; }
 
         /// <summary>
         /// Valvola prevista per un circuito di questo DN: sotto la soglia la sfera, sopra la boax.
@@ -169,10 +199,10 @@ namespace SayRevit.Core.Model
                 TypeName = pick == null ? null : pick.TypeName,
                 DnMm = dnMm,
                 PnBar = ValvePnBar,
-                DistanceMm = ValveDistanceMm,
-                // la boax si monta tra due flange e ruotata sull'asse, la valvola a sfera no
+                DistanceMm = ValveAxisDistanceMm,
+                // la boax si monta tra due flange, la valvola a sfera no; ognuna ha la sua rotazione
                 WithFlanges = !ball,
-                RollDegrees = ball ? 0 : ButterflyRollDegrees
+                RollDegrees = ball ? BallRollDegrees : ButterflyRollDegrees
             };
         }
 
@@ -391,7 +421,8 @@ namespace SayRevit.Core.Model
 
             result.Notes.Add("Valvole in linea su ogni stacco: a sfera fino a DN" + MepSize.Fmt(BallValveMaxDnMm) +
                              " compreso, boax oltre; centro a " + MepSize.Fmt(ValveDistanceMm) +
-                             " mm dall'asse del collettore.");
+                             " mm dal bordo del collettore (" + MepSize.Fmt(ValveAxisDistanceMm) + " mm dall'asse, raggio esterno " +
+                             MepSize.Fmt(HeaderOuterRadiusMm) + " mm).");
             if (hasButterfly && !string.IsNullOrWhiteSpace(ButterflyValveFamily))
             {
                 result.Notes.Add("Flange (Flansch) prima e dopo ogni valvola boax: automatiche per inox e acciaio nero, " +
@@ -400,6 +431,8 @@ namespace SayRevit.Core.Model
                     result.Notes.Add("Valvole boax girate di " + MepSize.Fmt(ButterflyRollDegrees) +
                                      "° attorno all'asse del tubo (flange comprese).");
             }
+            if (hasBall && !string.IsNullOrWhiteSpace(BallValveFamily) && Math.Abs(BallRollDegrees) > 0.001)
+                result.Notes.Add("Valvole a sfera girate di " + MepSize.Fmt(BallRollDegrees) + "° attorno all'asse del tubo.");
 
             if (hasBall && string.IsNullOrWhiteSpace(BallValveFamily))
                 result.Warnings.Add("Nessuna famiglia scelta per la valvola a sfera: i circuiti fino a DN" +
@@ -440,13 +473,13 @@ namespace SayRevit.Core.Model
                 }
             }
 
-            if (ValveDistanceMm <= headerDn / 2.0)
-                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dall'asse: cadono dentro il collettore (DN" +
-                                    MepSize.Fmt(headerDn) + "). Aumenta la distanza ad almeno " +
-                                    MepSize.Fmt(headerDn / 2.0 + 50) + " mm.");
-            if (ValveDistanceMm >= CircuitLengthMm)
-                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dall'asse: oltre la lunghezza dei circuiti (" +
-                                    MepSize.Fmt(CircuitLengthMm) + " mm). Non verranno inserite.");
+            if (ValveDistanceMm <= 0)
+                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dal bordo: cadono dentro il collettore (DN" +
+                                    MepSize.Fmt(headerDn) + "). Usa una distanza positiva, almeno 50 mm.");
+            if (ValveAxisDistanceMm >= CircuitLengthMm)
+                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dal bordo (" + MepSize.Fmt(ValveAxisDistanceMm) +
+                                    " mm dall'asse): oltre la lunghezza dei circuiti (" + MepSize.Fmt(CircuitLengthMm) +
+                                    " mm). Non verranno inserite.");
         }
 
         private MepRun MakeHeaderRun(double headerDn)

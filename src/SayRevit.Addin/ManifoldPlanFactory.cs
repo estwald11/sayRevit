@@ -31,7 +31,8 @@ namespace SayRevit.Addin
                 ButterflyValveFamily = FamilyOrNull(settings.ManifoldButterflyValveFamily, catalog),
                 ValvePnBar = settings.ManifoldValvePnBar,
                 ValveDistanceMm = settings.ManifoldValveDistanceMm,
-                ButterflyRollDegrees = settings.ManifoldButterflyRollDeg
+                ButterflyRollDegrees = settings.ManifoldButterflyRollDeg,
+                BallRollDegrees = settings.ManifoldBallRollDeg
             };
             plan.BallValveTypes.AddRange(TypesOf(plan.BallValveFamily, catalog));
             plan.ButterflyValveTypes.AddRange(TypesOf(plan.ButterflyValveFamily, catalog));

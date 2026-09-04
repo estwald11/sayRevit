@@ -10,8 +10,11 @@ system types and levels already loaded in the project. Two modes:
 - **Manifold mode (Collettore)** — fully parametric supply/return manifold builder.
   No natural language: every value comes from explicit fields.
 
-Both modes show a preview with notes and warnings before anything is created. Creation
-runs in a single transaction (one Undo step), and created elements are selected at the end.
+Both modes show a preview with notes and warnings before anything is created. **Create in
+Revit** closes the window and asks for the start point in the model (Esc cancels); the level is
+the active view's one and the elevation above it is the `DefaultElevationMm` setting (2500 mm).
+Creation runs in a single transaction (one Undo step), and created elements are selected at
+the end.
 
 ## Manifold mode
 
@@ -34,7 +37,10 @@ runs in a single transaction (one Undo step), and created elements are selected 
 - **Valves on every stub**: an in-line valve is inserted on each supply and return stub.
   Ball valve up to a DN threshold (default DN32), butterfly (boax) above it — the threshold
   is an input, as are the two families (picked among the pipe accessories loaded in the
-  project), the preferred PN and the distance from the header axis. The type is chosen from
+  project), the preferred PN and the distance of the valve centre from the **outer edge** of the
+  header (default 150 mm; the outer diameter comes from the pipe type's segment sizes, so the
+  value is independent of the header DN the formula picks). Each family has its own rotation
+  about the pipe axis (ball valve default 0°, boax 90°). The type is chosen from
   the family's type names, which may be metric (`DN40_PN16_48013980`) or imperial
   (`1 1/2" Lever`); the exact type per DN is shown in the preview before anything is created.
   Valves are placed on a work plane that contains the stub axis (what Revit does when you

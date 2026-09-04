@@ -2281,8 +2281,7 @@ namespace SayRevit.Addin.Revit
                     footprints.Add(fp);
                 }
 
-                var headerRadius = plan.EffectiveHeaderDnMm / 2.0 + 5; // esterno approssimato
-                var r = plan.ApplyAutoSpacing(footprints, headerRadius);
+                var r = plan.ApplyAutoSpacing(footprints, plan.HeaderOuterRadiusMm);
                 NoteOnce("Interasse automatico: " + MepSize.Fmt(r.SpacingMm) + " mm (minimo richiesto " + MepSize.Fmt(plan.SpacingFloorMm) + " mm).");
                 foreach (var n in r.Notes) NoteOnce(n);
                 foreach (var w in r.Warnings) WarnOnce(w);

@@ -174,7 +174,7 @@ namespace SayRevit.Core.Tests
         {
             var plan = Plan(20);
             plan.HeaderDnMm = 200;
-            plan.ValveDistanceMm = 80;
+            plan.ValveDistanceMm = 0;
             Assert.Contains(plan.ToParseResult().Warnings, w => w.Contains("dentro il collettore"));
         }
 
@@ -188,11 +188,41 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void DistanzaValvola_ArrivaAlloStacco()
+        public void DistanzaValvola_SiMisuraDalBordoDelCollettore()
+        {
+            // la distanza dall'asse è bordo + raggio esterno della misura scelta nel tipo
+            var plan = Plan(20);
+            plan.HeaderDnMm = 100;
+            plan.HeaderSizeCandidates.Add(new CatalogPipeSize { NominalMm = 100, InnerMm = 105.3, OuterMm = 114.3 });
+            plan.ValveDistanceMm = 150;
+            Assert.Equal(57.15, plan.HeaderOuterRadiusMm, 3);
+            Assert.Equal(207.15, Valves(plan).Single().DistanceMm, 3);
+            Assert.Contains(plan.ToParseResult().Notes, n => n.Contains("150 mm dal bordo"));
+        }
+
+        [Fact]
+        public void DistanzaValvola_SenzaDiametroEsterno_ApprossimaIlRaggio()
         {
             var plan = Plan(20);
-            plan.ValveDistanceMm = 220;
-            Assert.Equal(220, Valves(plan).Single().DistanceMm);
+            plan.HeaderDnMm = 100;
+            plan.ValveDistanceMm = 150;
+            Assert.Equal(55, plan.HeaderOuterRadiusMm);
+            Assert.Equal(205, Valves(plan).Single().DistanceMm);
+        }
+
+        [Fact]
+        public void RotazioneSfera_ScegliibileDallUtente_NonToccaLaBoax()
+        {
+            var plan = Plan(25, 40);
+            plan.BallRollDegrees = 90;
+            var valves = Valves(plan);
+            Assert.Equal(90, valves[0].RollDegrees);
+            Assert.Equal(90, valves[1].RollDegrees);
+            plan.ButterflyRollDegrees = 0;
+            valves = Valves(plan);
+            Assert.Equal(90, valves[0].RollDegrees);
+            Assert.Equal(0, valves[1].RollDegrees);
+            Assert.Contains(plan.ToParseResult().Notes, n => n.Contains("sfera girate di 90"));
         }
     }
 }

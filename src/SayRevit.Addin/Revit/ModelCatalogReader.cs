@@ -139,6 +139,7 @@ namespace SayRevit.Addin.Revit
                 // DN → diametro interno: se lo stesso DN compare in più segmenti si tiene
                 // l'interno più piccolo (scelta prudente per il dimensionamento).
                 var sizes = new SortedDictionary<double, double>();
+                var outers = new Dictionary<double, double>();
                 for (var i = 0; i < n; i++)
                 {
                     var rule = rpm.GetRule(RoutingPreferenceRuleGroupType.Segments, i);
@@ -149,15 +150,19 @@ namespace SayRevit.Addin.Revit
                     {
                         var nominal = Math.Round(Units.FtToMm(s.NominalDiameter), 1);
                         var inner = Math.Round(Units.FtToMm(s.InnerDiameter), 1);
+                        var outer = Math.Round(Units.FtToMm(s.OuterDiameter), 1);
                         if (!sizes.TryGetValue(nominal, out var existing) || (inner > 0 && (existing <= 0 || inner < existing)))
+                        {
                             sizes[nominal] = inner;
+                            outers[nominal] = outer;
+                        }
                     }
                 }
                 foreach (var kv in sizes)
                 {
                     ct.AvailableDiametersMm.Add(kv.Key);
                     if (ct.Kind == MepKind.Pipe)
-                        ct.Sizes.Add(new CatalogPipeSize { NominalMm = kv.Key, InnerMm = kv.Value });
+                        ct.Sizes.Add(new CatalogPipeSize { NominalMm = kv.Key, InnerMm = kv.Value, OuterMm = outers[kv.Key] });
                 }
             }
             catch

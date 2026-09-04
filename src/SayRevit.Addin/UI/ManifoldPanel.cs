@@ -67,6 +67,7 @@ namespace SayRevit.Addin.UI
         private readonly ComboBox _valvePn = new ComboBox();
         private readonly TextBox _valveDistance = new TextBox();
         private readonly ComboBox _butterflyRoll = new ComboBox();
+        private readonly ComboBox _ballRoll = new ComboBox();
 
         private bool _suspendChanged;
 
@@ -341,9 +342,10 @@ namespace SayRevit.Addin.UI
             panel.Children.Add(Labeled("PN:", _valvePn, 110));
             _valvePn.ToolTip = "Pressione nominale preferita quando i nomi dei tipi la dichiarano (es. DN40_PN16).";
 
-            panel.Children.Add(Labeled("Distanza dal collettore (mm):", _valveDistance, 60));
+            panel.Children.Add(Labeled("Distanza dal bordo del collettore (mm):", _valveDistance, 60));
             _valveDistance.Text = "150";
-            _valveDistance.ToolTip = "Distanza dall'asse del collettore al centro della valvola, lungo lo stacco.";
+            _valveDistance.ToolTip = "Distanza dal bordo esterno della base del collettore al centro della valvola, lungo lo stacco.\n" +
+                                     "Predefinito 150 mm; la distanza dall'asse è questa più il raggio esterno della base.";
 
             foreach (var a in RollAngles) _butterflyRoll.Items.Add(a + "°");
             _butterflyRoll.SelectedItem = "90°";
@@ -351,9 +353,15 @@ namespace SayRevit.Addin.UI
             _butterflyRoll.ToolTip = "Rotazione della boax (e delle sue flange) attorno all'asse del tubo.\n" +
                                      "Se la leva esce dal verso sbagliato, cambia qui senza ricompilare.";
 
+            foreach (var a in RollAngles) _ballRoll.Items.Add(a + "°");
+            _ballRoll.SelectedItem = "0°";
+            panel.Children.Add(Labeled("Rotazione sfera:", _ballRoll, 70));
+            _ballRoll.ToolTip = "Rotazione della valvola a sfera attorno all'asse del tubo, stessa convenzione della boax.";
+
             _ballMaxDn.TextChanged += (s, e) => Notify();
             _valveDistance.TextChanged += (s, e) => Notify();
             _butterflyRoll.SelectionChanged += (s, e) => Notify();
+            _ballRoll.SelectionChanged += (s, e) => Notify();
             _ballFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
             _butterflyFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
             _valvePn.SelectionChanged += (s, e) => Notify();
@@ -433,6 +441,7 @@ namespace SayRevit.Addin.UI
             var on = _withValves.IsChecked == true;
             _ballMaxDn.IsEnabled = on;
             _butterflyRoll.IsEnabled = on;
+            _ballRoll.IsEnabled = on;
             _ballFamily.IsEnabled = on;
             _butterflyFamily.IsEnabled = on;
             _valveDistance.IsEnabled = on;
@@ -605,7 +614,8 @@ namespace SayRevit.Addin.UI
                 ButterflyValveFamily = SelectedFamily(_butterflyFamily),
                 ValvePnBar = SelectedPn(),
                 ValveDistanceMm = ParseNumber(_valveDistance.Text, 150),
-                ButterflyRollDegrees = ParseNumber((_butterflyRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90)
+                ButterflyRollDegrees = ParseNumber((_butterflyRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90),
+                BallRollDegrees = ParseNumber((_ballRoll.SelectedItem as string ?? "0").TrimEnd('°'), 0)
             };
             plan.BallValveTypes.AddRange(FamilyTypes(_ballFamily));
             plan.ButterflyValveTypes.AddRange(FamilyTypes(_butterflyFamily));
@@ -654,6 +664,8 @@ namespace SayRevit.Addin.UI
                 _valveDistance.Text = settings.ManifoldValveDistanceMm.ToString("0.##", CultureInfo.InvariantCulture);
                 var storedRoll = MepSize.Fmt(settings.ManifoldButterflyRollDeg) + "°";
                 if (_butterflyRoll.Items.Contains(storedRoll)) _butterflyRoll.SelectedItem = storedRoll;
+                var storedBallRoll = MepSize.Fmt(settings.ManifoldBallRollDeg) + "°";
+                if (_ballRoll.Items.Contains(storedBallRoll)) _ballRoll.SelectedItem = storedBallRoll;
                 // Le famiglie salvate valgono solo se sono caricate anche in QUESTO progetto:
                 // altrimenti resta la proposta fatta sul nome all'apertura.
                 SelectFamily(_ballFamily, settings.ManifoldBallValveFamily);
@@ -702,6 +714,7 @@ namespace SayRevit.Addin.UI
             settings.ManifoldValvePnBar = plan.ValvePnBar;
             settings.ManifoldValveDistanceMm = plan.ValveDistanceMm;
             settings.ManifoldButterflyRollDeg = plan.ButterflyRollDegrees;
+            settings.ManifoldBallRollDeg = plan.BallRollDegrees;
         }
 
         /// <summary>Sceglie la famiglia salvata, se è caricata anche in questo progetto.</summary>

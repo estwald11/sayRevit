@@ -9,6 +9,9 @@ namespace SayRevit.Core.Model
 
         /// <summary>Diametro interno (mm); 0 = non leggibile dal segmento.</summary>
         public double InnerMm { get; set; }
+
+        /// <summary>Diametro esterno (mm); 0 = non leggibile dal segmento.</summary>
+        public double OuterMm { get; set; }
     }
 
     /// <summary>Descrizione di un tipo di tubazione/canale presente nel modello.</summary>
