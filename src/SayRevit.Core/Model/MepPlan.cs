@@ -80,9 +80,53 @@ namespace SayRevit.Core.Model
         }
     }
 
+    /// <summary>Valvola da inserire lungo uno stacco, in linea sul tubo.</summary>
+    public sealed class MepValve
+    {
+        public ValveKind Kind { get; set; }
+
+        /// <summary>Nome esatto della famiglia caricata nel progetto.</summary>
+        public string FamilyName { get; set; }
+
+        /// <summary>Nome del tipo scelto sul DN; null = da risolvere sul documento al momento della creazione.</summary>
+        public string TypeName { get; set; }
+
+        /// <summary>DN del tubo su cui va la valvola (mm).</summary>
+        public double DnMm { get; set; }
+
+        /// <summary>PN richiesto (bar); 0 = indifferente.</summary>
+        public double PnBar { get; set; }
+
+        /// <summary>Distanza dall'inizio dello stacco (asse del collettore) al centro della valvola (mm).</summary>
+        public double DistanceMm { get; set; } = 150;
+
+        /// <summary>True se la valvola va montata tra due flange (boax): la famiglia dipende dal materiale.</summary>
+        public bool WithFlanges { get; set; }
+
+        /// <summary>Rotazione della valvola attorno all'asse del tubo (gradi); la boax va a 90°.</summary>
+        public double RollDegrees { get; set; }
+
+        public string KindLabel
+        {
+            get { return Kind == ValveKind.Ball ? "valvola a sfera" : "valvola boax"; }
+        }
+
+        public override string ToString()
+        {
+            var s = KindLabel;
+            s += string.IsNullOrWhiteSpace(TypeName)
+                ? " (tipo scelto in Revit sulla misura)"
+                : " \"" + TypeName + "\"";
+            return s + " a " + MepSize.Fmt(DistanceMm) + " mm dal collettore";
+        }
+    }
+
     /// <summary>Uno stacco (derivazione) da un tratto principale.</summary>
     public sealed class MepBranch
     {
+        /// <summary>Valvola in linea sullo stacco; null = nessuna valvola.</summary>
+        public MepValve Valve { get; set; }
+
         public MepSize Size { get; set; }
         public int Count { get; set; } = 1;
         public double LengthMm { get; set; } = 500;

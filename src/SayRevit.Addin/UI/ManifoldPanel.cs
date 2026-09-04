@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using SayRevit.Core.Model;
+using SayRevit.Core.Parsing;
 
 namespace SayRevit.Addin.UI
 {
@@ -25,6 +26,19 @@ namespace SayRevit.Addin.UI
             new KeyValuePair<string, DirectionKind>("alternati", DirectionKind.Alternate)
         };
 
+        /// <summary>Voce delle tendine delle famiglie che significa "non mettere questa valvola".</summary>
+        private const string NoFamily = "(nessuna)";
+
+        /// <summary>Voce della tendina PN quando la pressione nominale non deve pesare sulla scelta.</summary>
+        private const string AnyPn = "(indifferente)";
+
+        /// <summary>Rotazioni offerte per la boax attorno all'asse del tubo.</summary>
+        private static readonly string[] RollAngles = { "0", "90", "180", "270" };
+
+        /// <summary>Parole cercate nel nome della famiglia per proporla come valvola a sfera / boax.</summary>
+        private static readonly string[] BallHints = { "sfera", "ball" };
+        private static readonly string[] ButterflyHints = { "boax", "farfalla", "butterfly", "wafer" };
+
         private readonly ModelCatalog _catalog;
         private readonly ComboBox _pipeType = new ComboBox();
         private readonly TextBlock _typeInfo = new TextBlock();
@@ -35,10 +49,24 @@ namespace SayRevit.Addin.UI
         private readonly CheckBox _autoHeaderDn = new CheckBox();
         private readonly TextBox _headerDn = new TextBox();
         private readonly TextBox _spacing = new TextBox();
+        private readonly CheckBox _autoSpacing = new CheckBox
+        {
+            Content = "Interasse automatico: il minimo senza interferenze tra gli stacchi (il valore sopra è il minimo)",
+            IsChecked = true,
+            Margin = new Thickness(0, 2, 0, 4)
+        };
         private readonly TextBox _circuitLength = new TextBox();
         private readonly ComboBox _circuitDirection = new ComboBox();
         private readonly CheckBox _withReturn = new CheckBox();
         private readonly TextBox _returnOffset = new TextBox();
+
+        private readonly CheckBox _withValves = new CheckBox();
+        private readonly TextBox _ballMaxDn = new TextBox();
+        private readonly ComboBox _ballFamily = new ComboBox();
+        private readonly ComboBox _butterflyFamily = new ComboBox();
+        private readonly ComboBox _valvePn = new ComboBox();
+        private readonly TextBox _valveDistance = new TextBox();
+        private readonly ComboBox _butterflyRoll = new ComboBox();
 
         private bool _suspendChanged;
 
@@ -54,11 +82,13 @@ namespace SayRevit.Addin.UI
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             PlaceRow(BuildMaterialRow(), 0);
             PlaceRow(BuildCircuitHeader(), 1);
             PlaceRow(BuildCircuitList(), 2);
             PlaceRow(BuildParameters(), 3);
+            PlaceRow(BuildValves(), 4);
         }
 
         private void PlaceRow(UIElement element, int row)
@@ -237,6 +267,9 @@ namespace SayRevit.Addin.UI
 
             panel.Children.Add(Labeled("Interasse (mm):", _spacing, 70));
             _spacing.ToolTip = "Distanza tra due circuiti consecutivi lungo il collettore.";
+            panel.Children.Add(_autoSpacing);
+            _autoSpacing.ToolTip = "Calcolato in Revit al momento della creazione dagli ingombri reali di valvole, flange e leve, " +
+                                   "compresi gli stacchi del ritorno interlacciati.";
 
             panel.Children.Add(Labeled("Lunghezza circuiti (mm):", _circuitLength, 70));
 
@@ -259,11 +292,151 @@ namespace SayRevit.Addin.UI
 
             _headerDn.TextChanged += (s, e) => Notify();
             _spacing.TextChanged += (s, e) => Notify();
+            _autoSpacing.Checked += (s, e) => Notify();
+            _autoSpacing.Unchecked += (s, e) => Notify();
             _circuitLength.TextChanged += (s, e) => Notify();
             _returnOffset.TextChanged += (s, e) => Notify();
             _circuitDirection.SelectionChanged += (s, e) => Notify();
 
             return panel;
+        }
+
+        // --------------------------------------------------------------- valvole
+
+        /// <summary>
+        /// Valvole in linea sugli stacchi. La regola è una sola soglia di DN, modificabile:
+        /// fino a quel DN (compreso) si usa la valvola a sfera, oltre la boax. Le famiglie sono
+        /// quelle caricate nel progetto, proposte per nome ma sempre scegliibili dall'utente.
+        /// </summary>
+        private UIElement BuildValves()
+        {
+            var section = new StackPanel();
+
+            var head = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 4) };
+            _withValves.Content = "Valvole sugli stacchi";
+            _withValves.IsChecked = true;
+            _withValves.FontWeight = FontWeights.SemiBold;
+            _withValves.VerticalAlignment = VerticalAlignment.Center;
+            _withValves.ToolTip = "Inserisce una valvola in linea su ogni stacco, di mandata e di ritorno.";
+            _withValves.Checked += (s, e) => { UpdateValvesEnabled(); Notify(); };
+            _withValves.Unchecked += (s, e) => { UpdateValvesEnabled(); Notify(); };
+            head.Children.Add(_withValves);
+            section.Children.Add(head);
+
+            var panel = new WrapPanel();
+
+            panel.Children.Add(Labeled("Sfera fino a DN:", _ballMaxDn, 60));
+            _ballMaxDn.Text = "32";
+            _ballMaxDn.ToolTip = "Fino a questo DN compreso si usa la valvola a sfera; oltre si usa la boax.\n" +
+                                 "Predefinito 32: sfera fino a DN32, boax da DN40 in su.";
+
+            FillFamilies(_ballFamily, BallHints);
+            panel.Children.Add(Labeled("Famiglia sfera:", _ballFamily, 190));
+            _ballFamily.ToolTip = "Famiglia di valvole a sfera caricata nel progetto (accessori per tubazioni).";
+
+            FillFamilies(_butterflyFamily, ButterflyHints);
+            panel.Children.Add(Labeled("Famiglia boax:", _butterflyFamily, 190));
+            _butterflyFamily.ToolTip = "Famiglia di valvole boax caricata nel progetto (accessori per tubazioni).";
+
+            panel.Children.Add(Labeled("PN:", _valvePn, 110));
+            _valvePn.ToolTip = "Pressione nominale preferita quando i nomi dei tipi la dichiarano (es. DN40_PN16).";
+
+            panel.Children.Add(Labeled("Distanza dal collettore (mm):", _valveDistance, 60));
+            _valveDistance.Text = "150";
+            _valveDistance.ToolTip = "Distanza dall'asse del collettore al centro della valvola, lungo lo stacco.";
+
+            foreach (var a in RollAngles) _butterflyRoll.Items.Add(a + "°");
+            _butterflyRoll.SelectedItem = "90°";
+            panel.Children.Add(Labeled("Rotazione boax:", _butterflyRoll, 70));
+            _butterflyRoll.ToolTip = "Rotazione della boax (e delle sue flange) attorno all'asse del tubo.\n" +
+                                     "Se la leva esce dal verso sbagliato, cambia qui senza ricompilare.";
+
+            _ballMaxDn.TextChanged += (s, e) => Notify();
+            _valveDistance.TextChanged += (s, e) => Notify();
+            _butterflyRoll.SelectionChanged += (s, e) => Notify();
+            _ballFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
+            _butterflyFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
+            _valvePn.SelectionChanged += (s, e) => Notify();
+
+            section.Children.Add(panel);
+
+            if (_catalog.PipeAccessories.Count == 0)
+            {
+                _withValves.IsChecked = false;
+                _withValves.IsEnabled = false;
+                _withValves.ToolTip = "Questo progetto non contiene famiglie di accessori per tubazioni: carica le valvole per usarle.";
+            }
+            FillPressureClasses();
+            UpdateValvesEnabled();
+            return section;
+        }
+
+        /// <summary>Riempie una tendina con le famiglie di accessori, proponendo quella suggerita dal nome.</summary>
+        private void FillFamilies(ComboBox combo, string[] hints)
+        {
+            combo.Items.Add(NoFamily);
+            foreach (var f in _catalog.PipeAccessories) combo.Items.Add(f.Name);
+            combo.SelectedIndex = 0;
+
+            foreach (var f in _catalog.PipeAccessories)
+            {
+                var name = TextUtil.Fold(f.Name);
+                if (!hints.Any(h => name.Contains(h))) continue;
+                combo.SelectedItem = f.Name;
+                break;
+            }
+        }
+
+        /// <summary>PN offerti: quelli dichiarati nei nomi dei tipi delle famiglie scelte.</summary>
+        private void FillPressureClasses()
+        {
+            var previous = _valvePn.SelectedItem as string;
+            var names = FamilyTypes(_ballFamily).Concat(FamilyTypes(_butterflyFamily));
+            var available = ValveTypeMatcher.AvailablePn(names);
+
+            var suspended = _suspendChanged;
+            _suspendChanged = true;
+            try
+            {
+                _valvePn.Items.Clear();
+                _valvePn.Items.Add(AnyPn);
+                foreach (var pn in available) _valvePn.Items.Add("PN" + MepSize.Fmt(pn));
+                _valvePn.SelectedIndex = 0;
+                if (previous != null && _valvePn.Items.Contains(previous)) _valvePn.SelectedItem = previous;
+                else if (_valvePn.Items.Contains("PN16")) _valvePn.SelectedItem = "PN16";
+                _valvePn.IsEnabled = _withValves.IsChecked == true && available.Count > 0;
+            }
+            finally
+            {
+                _suspendChanged = suspended;
+            }
+        }
+
+        /// <summary>Nomi dei tipi della famiglia scelta nella tendina; vuoto con "(nessuna)".</summary>
+        private List<string> FamilyTypes(ComboBox combo)
+        {
+            var name = SelectedFamily(combo);
+            if (name == null) return new List<string>();
+            var family = _catalog.PipeAccessories.FirstOrDefault(f => f.Name == name);
+            return family == null ? new List<string>() : family.TypeNames;
+        }
+
+        /// <summary>Famiglia scelta nella tendina; null con "(nessuna)".</summary>
+        private static string SelectedFamily(ComboBox combo)
+        {
+            var name = combo.SelectedItem as string;
+            return string.IsNullOrWhiteSpace(name) || name == NoFamily ? null : name;
+        }
+
+        private void UpdateValvesEnabled()
+        {
+            var on = _withValves.IsChecked == true;
+            _ballMaxDn.IsEnabled = on;
+            _butterflyRoll.IsEnabled = on;
+            _ballFamily.IsEnabled = on;
+            _butterflyFamily.IsEnabled = on;
+            _valveDistance.IsEnabled = on;
+            _valvePn.IsEnabled = on && _valvePn.Items.Count > 1;
         }
 
         private static UIElement Labeled(string label, FrameworkElement control, double width)
@@ -386,6 +559,14 @@ namespace SayRevit.Addin.UI
             return double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out v) && v > 0 ? v : 0;
         }
 
+        /// <summary>PN scelto nella tendina ("PN16" → 16); 0 con "(indifferente)".</summary>
+        private double SelectedPn()
+        {
+            var text = _valvePn.SelectedItem as string;
+            if (string.IsNullOrWhiteSpace(text) || text == AnyPn) return 0;
+            return ParseNumber(text.TrimStart('P', 'N', 'p', 'n'), 0);
+        }
+
         private static double ParseNumber(string text, double fallback)
         {
             if (string.IsNullOrWhiteSpace(text)) return fallback;
@@ -411,13 +592,23 @@ namespace SayRevit.Addin.UI
             var plan = new ManifoldPlan
             {
                 SpacingMm = ParseNumber(_spacing.Text, 150),
+                AutoSpacing = _autoSpacing.IsChecked == true,
                 CircuitLengthMm = ParseNumber(_circuitLength.Text, 500),
                 HeaderDirection = DirectionKind.PlusX, // direzione fissa: +X (est)
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
                 PipeTypeName = _pipeType.SelectedItem as string,
                 WithReturn = _withReturn.IsChecked == true,
-                ReturnOffsetMm = ParseNumber(_returnOffset.Text, 300)
+                ReturnOffsetMm = ParseNumber(_returnOffset.Text, 300),
+                WithValves = _withValves.IsChecked == true,
+                BallValveMaxDnMm = ParseNumber(_ballMaxDn.Text, 32),
+                BallValveFamily = SelectedFamily(_ballFamily),
+                ButterflyValveFamily = SelectedFamily(_butterflyFamily),
+                ValvePnBar = SelectedPn(),
+                ValveDistanceMm = ParseNumber(_valveDistance.Text, 150),
+                ButterflyRollDegrees = ParseNumber((_butterflyRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90)
             };
+            plan.BallValveTypes.AddRange(FamilyTypes(_ballFamily));
+            plan.ButterflyValveTypes.AddRange(FamilyTypes(_butterflyFamily));
             var type = SelectedType;
             if (type != null) plan.HeaderSizeCandidates.AddRange(type.Sizes);
             if (_autoHeaderDn.IsChecked != true)
@@ -446,6 +637,7 @@ namespace SayRevit.Addin.UI
                     ? settings.ManifoldHeaderDnMm.ToString("0.##", CultureInfo.InvariantCulture)
                     : string.Empty;
                 _spacing.Text = settings.ManifoldSpacingMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _autoSpacing.IsChecked = settings.ManifoldAutoSpacing;
                 _circuitLength.Text = settings.ManifoldCircuitLengthMm.ToString("0.##", CultureInfo.InvariantCulture);
                 _circuitDirection.SelectedIndex = Math.Max(0, IndexOf(CircuitDirections, settings.ManifoldCircuitDirection));
 
@@ -456,6 +648,27 @@ namespace SayRevit.Addin.UI
                 var storedType = _pipeType.Items.IndexOf(settings.ManifoldPipeTypeName);
                 if (storedType >= 0) _pipeType.SelectedIndex = storedType;
                 UpdatePipeTypeTooltip();
+
+                if (_withValves.IsEnabled) _withValves.IsChecked = settings.ManifoldWithValves;
+                _ballMaxDn.Text = settings.ManifoldBallValveMaxDnMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _valveDistance.Text = settings.ManifoldValveDistanceMm.ToString("0.##", CultureInfo.InvariantCulture);
+                var storedRoll = MepSize.Fmt(settings.ManifoldButterflyRollDeg) + "°";
+                if (_butterflyRoll.Items.Contains(storedRoll)) _butterflyRoll.SelectedItem = storedRoll;
+                // Le famiglie salvate valgono solo se sono caricate anche in QUESTO progetto:
+                // altrimenti resta la proposta fatta sul nome all'apertura.
+                SelectFamily(_ballFamily, settings.ManifoldBallValveFamily);
+                SelectFamily(_butterflyFamily, settings.ManifoldButterflyValveFamily);
+                FillPressureClasses();
+                if (settings.ManifoldValvePnBar > 0)
+                {
+                    var pn = "PN" + MepSize.Fmt(settings.ManifoldValvePnBar);
+                    if (_valvePn.Items.Contains(pn)) _valvePn.SelectedItem = pn;
+                }
+                else
+                {
+                    _valvePn.SelectedIndex = 0;
+                }
+                UpdateValvesEnabled();
 
                 var stored = new ManifoldPlan();
                 stored.LoadCircuitsFromString(settings.ManifoldCircuits);
@@ -474,12 +687,28 @@ namespace SayRevit.Addin.UI
             var plan = BuildPlan();
             settings.ManifoldHeaderDnMm = plan.HeaderDnMm ?? 0;
             settings.ManifoldSpacingMm = plan.SpacingMm;
+            settings.ManifoldAutoSpacing = plan.AutoSpacing;
             settings.ManifoldCircuitLengthMm = plan.CircuitLengthMm;
             settings.ManifoldCircuitDirection = plan.CircuitDirection.ToString();
             settings.ManifoldCircuits = plan.CircuitsToString();
             settings.ManifoldPipeTypeName = plan.PipeTypeName ?? string.Empty;
             settings.ManifoldWithReturn = plan.WithReturn;
             settings.ManifoldReturnOffsetMm = plan.ReturnOffsetMm;
+            settings.ManifoldWithValves = plan.WithValves;
+            settings.ManifoldBallValveMaxDnMm = plan.BallValveMaxDnMm;
+            // "(nessuna)" viene salvato com'è: è una scelta dell'utente, non un valore mancante.
+            settings.ManifoldBallValveFamily = plan.BallValveFamily ?? NoFamily;
+            settings.ManifoldButterflyValveFamily = plan.ButterflyValveFamily ?? NoFamily;
+            settings.ManifoldValvePnBar = plan.ValvePnBar;
+            settings.ManifoldValveDistanceMm = plan.ValveDistanceMm;
+            settings.ManifoldButterflyRollDeg = plan.ButterflyRollDegrees;
+        }
+
+        /// <summary>Sceglie la famiglia salvata, se è caricata anche in questo progetto.</summary>
+        private static void SelectFamily(ComboBox combo, string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return;
+            if (combo.Items.Contains(name)) combo.SelectedItem = name;
         }
 
         private static int IndexOf(KeyValuePair<string, DirectionKind>[] options, string name)

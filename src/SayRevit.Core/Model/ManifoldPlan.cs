@@ -55,6 +55,40 @@ namespace SayRevit.Core.Model
         /// <summary>Interasse tra due circuiti consecutivi (mm).</summary>
         public double SpacingMm { get; set; } = 150;
 
+        /// <summary>
+        /// Se true l'interasse viene calcolato in Revit dagli ingombri reali degli elementi sugli
+        /// stacchi (valvola, flange, leva): il minimo che evita interferenze tra stacchi vicini,
+        /// mai sotto <see cref="SpacingMm"/>, che fa da pavimento.
+        /// </summary>
+        public bool AutoSpacing { get; set; } = true;
+
+        /// <summary>Aria minima tra due elementi di stacchi diversi (mm), usata dall'interasse automatico.</summary>
+        public double SpacingClearanceMm { get; set; } = 20;
+
+        private ManifoldSpacing.Result _autoSpacing;
+
+        /// <summary>Interasse minimo richiesto dall'utente, conservato quando l'automatico lo alza.</summary>
+        public double SpacingFloorMm { get; private set; }
+
+        /// <summary>
+        /// Applica l'interasse automatico dagli ingombri misurati (uno per circuito valido, nello
+        /// stesso ordine di <see cref="CircuitDnsMm"/>) e lo scrive in <see cref="SpacingMm"/>.
+        /// </summary>
+        public ManifoldSpacing.Result ApplyAutoSpacing(IList<StubFootprint> footprints, double headerRadiusMm)
+        {
+            if (_autoSpacing == null) SpacingFloorMm = SpacingMm;
+            var r = ManifoldSpacing.Minimal(footprints, SpacingFloorMm, WithReturn, ReturnOffsetMm, headerRadiusMm, SpacingClearanceMm, 10);
+            _autoSpacing = r;
+            SpacingMm = r.SpacingMm;
+            return r;
+        }
+
+        /// <summary>DN dei circuiti validi, nell'ordine lungo la base.</summary>
+        public List<double> CircuitDnsMm()
+        {
+            return ValidCircuits().Select(c => c.DnMm).ToList();
+        }
+
         /// <summary>Lunghezza di ogni circuito a partire dal collettore (mm).</summary>
         public double CircuitLengthMm { get; set; } = 500;
 
@@ -79,6 +113,68 @@ namespace SayRevit.Core.Model
         /// quello col diametro INTERNO minimo tra quelli ≥ D calcolato dalla formula.
         /// </summary>
         public List<CatalogPipeSize> HeaderSizeCandidates { get; } = new List<CatalogPipeSize>();
+
+        // ------------------------------------------------------------- valvole
+
+        /// <summary>Se true su ogni stacco viene inserita una valvola in linea.</summary>
+        public bool WithValves { get; set; } = true;
+
+        /// <summary>
+        /// DN massimo (incluso) per cui si usa la valvola a sfera; oltre questo DN si usa la boax.
+        /// Predefinito 32: sfera fino a DN32, boax da DN40 in su.
+        /// </summary>
+        public double BallValveMaxDnMm { get; set; } = 32;
+
+        /// <summary>Nome esatto della famiglia di valvole a sfera caricata nel progetto; vuoto = nessuna.</summary>
+        public string BallValveFamily { get; set; }
+
+        /// <summary>Nome esatto della famiglia di valvole boax caricata nel progetto; vuoto = nessuna.</summary>
+        public string ButterflyValveFamily { get; set; }
+
+        /// <summary>Nomi dei tipi delle due famiglie: servono a scegliere il tipo sul DN già in anteprima.</summary>
+        public List<string> BallValveTypes { get; } = new List<string>();
+
+        public List<string> ButterflyValveTypes { get; } = new List<string>();
+
+        /// <summary>PN preferito quando i nomi dei tipi lo dichiarano (0 = indifferente).</summary>
+        public double ValvePnBar { get; set; } = 16;
+
+        /// <summary>Distanza dall'asse del collettore al centro della valvola, lungo lo stacco (mm).</summary>
+        public double ValveDistanceMm { get; set; } = 150;
+
+        /// <summary>
+        /// Rotazione della boax attorno all'asse del tubo (gradi). A 0° lo Z della famiglia (la
+        /// leva, nella boax) guarda lungo il collettore; a 90° guarda di traverso.
+        /// </summary>
+        public double ButterflyRollDegrees { get; set; } = 90;
+
+        /// <summary>
+        /// Valvola prevista per un circuito di questo DN: sotto la soglia la sfera, sopra la boax.
+        /// Null se le valvole sono disattivate o la famiglia corrispondente non è stata scelta.
+        /// Il tipo viene deciso qui, così l'anteprima mostra esattamente quello che verrà inserito.
+        /// </summary>
+        public MepValve ValveFor(double dnMm)
+        {
+            if (!WithValves || dnMm <= 0) return null;
+
+            var ball = dnMm <= BallValveMaxDnMm + 0.001;
+            var family = ball ? BallValveFamily : ButterflyValveFamily;
+            if (string.IsNullOrWhiteSpace(family)) return null;
+
+            var pick = ValveTypeMatcher.Pick(ball ? BallValveTypes : ButterflyValveTypes, dnMm, ValvePnBar);
+            return new MepValve
+            {
+                Kind = ball ? ValveKind.Ball : ValveKind.Butterfly,
+                FamilyName = family.Trim(),
+                TypeName = pick == null ? null : pick.TypeName,
+                DnMm = dnMm,
+                PnBar = ValvePnBar,
+                DistanceMm = ValveDistanceMm,
+                // la boax si monta tra due flange e ruotata sull'asse, la valvola a sfera no
+                WithFlanges = !ball,
+                RollDegrees = ball ? 0 : ButterflyRollDegrees
+            };
+        }
 
         /// <summary>Circuiti con un DN valido, gli unici che vengono modellati.</summary>
         public List<ManifoldCircuit> ValidCircuits()
@@ -209,6 +305,20 @@ namespace SayRevit.Core.Model
             result.Notes.Add("I circuiti non vengono raccordati: partono dall'asse del collettore, sovrapposti, senza T.");
             result.Notes.Add("Fondelli (Enddeckel) alle estremità delle basi: automatici per inox e acciaio nero; " +
                              "per gli altri materiali le estremità restano aperte.");
+            if (AutoSpacing)
+            {
+                if (_autoSpacing == null)
+                    result.Notes.Add("Interasse automatico: verrà calcolato in Revit dagli ingombri reali di valvole e flange, " +
+                                     "mai sotto " + MepSize.Fmt(SpacingMm) + " mm.");
+                else
+                {
+                    result.Notes.Add("Interasse automatico: " + MepSize.Fmt(SpacingMm) + " mm (minimo richiesto " +
+                                     MepSize.Fmt(SpacingFloorMm) + " mm, aria " + MepSize.Fmt(SpacingClearanceMm) + " mm).");
+                    foreach (var n in _autoSpacing.Notes) result.Notes.Add(n);
+                    foreach (var w in _autoSpacing.Warnings) result.Warnings.Add(w);
+                }
+            }
+
             if (WithReturn)
             {
                 plan.Runs.Add(MakeReturnRun(headerDn, circuits, positions));
@@ -258,7 +368,85 @@ namespace SayRevit.Core.Model
                 result.Warnings.Add("Interasse " + MepSize.Fmt(SpacingMm) + " mm inferiore al DN massimo dei circuiti (" +
                                     MepSize.Fmt(minSpacing) + "): i circuiti potrebbero sovrapporsi tra loro.");
 
+            CollectValveMessages(circuits, headerDn, result);
+
             return result;
+        }
+
+        /// <summary>
+        /// Note e avvisi sulle valvole, uno per DN e non uno per circuito: la regola di scelta,
+        /// il tipo che verrà usato per ogni DN e i casi in cui la famiglia non ha la misura giusta.
+        /// </summary>
+        private void CollectValveMessages(List<ManifoldCircuit> circuits, double headerDn, ParseResult result)
+        {
+            if (!WithValves)
+            {
+                result.Notes.Add("Nessuna valvola sugli stacchi (opzione disattivata).");
+                return;
+            }
+
+            var dns = circuits.Select(c => c.DnMm).Distinct().OrderBy(d => d).ToList();
+            var hasBall = dns.Any(d => d <= BallValveMaxDnMm + 0.001);
+            var hasButterfly = dns.Any(d => d > BallValveMaxDnMm + 0.001);
+
+            result.Notes.Add("Valvole in linea su ogni stacco: a sfera fino a DN" + MepSize.Fmt(BallValveMaxDnMm) +
+                             " compreso, boax oltre; centro a " + MepSize.Fmt(ValveDistanceMm) +
+                             " mm dall'asse del collettore.");
+            if (hasButterfly && !string.IsNullOrWhiteSpace(ButterflyValveFamily))
+            {
+                result.Notes.Add("Flange (Flansch) prima e dopo ogni valvola boax: automatiche per inox e acciaio nero, " +
+                                 "come i fondelli; per gli altri materiali la valvola resta senza flange.");
+                if (Math.Abs(ButterflyRollDegrees) > 0.001)
+                    result.Notes.Add("Valvole boax girate di " + MepSize.Fmt(ButterflyRollDegrees) +
+                                     "° attorno all'asse del tubo (flange comprese).");
+            }
+
+            if (hasBall && string.IsNullOrWhiteSpace(BallValveFamily))
+                result.Warnings.Add("Nessuna famiglia scelta per la valvola a sfera: i circuiti fino a DN" +
+                                    MepSize.Fmt(BallValveMaxDnMm) + " restano senza valvola.");
+            if (hasButterfly && string.IsNullOrWhiteSpace(ButterflyValveFamily))
+                result.Warnings.Add("Nessuna famiglia scelta per la valvola boax: i circuiti oltre DN" +
+                                    MepSize.Fmt(BallValveMaxDnMm) + " restano senza valvola.");
+
+            foreach (var dn in dns)
+            {
+                var ball = dn <= BallValveMaxDnMm + 0.001;
+                var family = ball ? BallValveFamily : ButterflyValveFamily;
+                if (string.IsNullOrWhiteSpace(family)) continue;
+
+                var kind = ball ? "valvola a sfera" : "valvola boax";
+                var pick = ValveTypeMatcher.Pick(ball ? BallValveTypes : ButterflyValveTypes, dn, ValvePnBar);
+                if (pick == null)
+                {
+                    result.Warnings.Add("DN" + MepSize.Fmt(dn) + ": nessun tipo della famiglia \"" + family +
+                                        "\" dichiara una misura nel nome; il tipo verrà scelto in Revit al momento della creazione.");
+                    continue;
+                }
+                if (!pick.ExactDn)
+                {
+                    result.Warnings.Add("DN" + MepSize.Fmt(dn) + ": la famiglia \"" + family + "\" non ha un tipo DN" +
+                                        MepSize.Fmt(dn) + "; uso \"" + pick.TypeName + "\" (DN" + MepSize.Fmt(pick.DnMm) +
+                                        "), la misura più vicina.");
+                }
+                else if (!pick.ExactPn)
+                {
+                    result.Warnings.Add("DN" + MepSize.Fmt(dn) + ": nessun tipo PN" + MepSize.Fmt(ValvePnBar) +
+                                        " nella famiglia \"" + family + "\"; uso \"" + pick.TypeName + "\" (PN" +
+                                        MepSize.Fmt(pick.PnBar) + ").");
+                }
+                else
+                {
+                    result.Notes.Add("DN" + MepSize.Fmt(dn) + " → " + kind + " \"" + pick.TypeName + "\".");
+                }
+            }
+
+            if (ValveDistanceMm <= headerDn / 2.0)
+                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dall'asse: cadono dentro il collettore (DN" +
+                                    MepSize.Fmt(headerDn) + "). Aumenta la distanza ad almeno " +
+                                    MepSize.Fmt(headerDn / 2.0 + 50) + " mm.");
+            if (ValveDistanceMm >= CircuitLengthMm)
+                result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dall'asse: oltre la lunghezza dei circuiti (" +
+                                    MepSize.Fmt(CircuitLengthMm) + " mm). Non verranno inserite.");
         }
 
         private MepRun MakeHeaderRun(double headerDn)
@@ -289,7 +477,8 @@ namespace SayRevit.Core.Model
                 // non può essere risolta dall'indice a valle: la fissiamo qui.
                 Direction = CircuitDirection == DirectionKind.Alternate
                     ? (index % 2 == 0 ? DirectionKind.Left : DirectionKind.Right)
-                    : CircuitDirection
+                    : CircuitDirection,
+                Valve = ValveFor(dnMm)
             };
             branch.PositionsMm.Add(positionMm);
             return branch;
@@ -329,7 +518,7 @@ namespace SayRevit.Core.Model
             sb.Append(HeaderDnMm.HasValue && HeaderDnMm.Value > 0 ? " (impostato)" : " (automatico)");
             sb.Append(", lunghezza ").Append(MepSize.Fmt(HeaderLengthMm)).Append(" mm");
             sb.Append(", ").Append(circuits.Count).Append(circuits.Count == 1 ? " circuito" : " circuiti");
-            sb.Append(", interasse ").Append(MepSize.Fmt(SpacingMm)).Append(" mm.");
+            sb.Append(", interasse ").Append(MepSize.Fmt(SpacingMm)).Append(AutoSpacing ? " mm (automatico)." : " mm.");
             sb.AppendLine();
             if (WithReturn)
                 sb.Append("Ritorno: base allineata a ").Append(MepSize.Fmt(ReturnOffsetMm))
@@ -344,6 +533,12 @@ namespace SayRevit.Core.Model
                 sb.Append("  ").Append(CircuitLabel(circuits[i], i));
                 sb.Append(": DN").Append(MepSize.Fmt(circuits[i].DnMm));
                 sb.Append(" a ").Append(MepSize.Fmt(positions[i])).Append(" mm dall'inizio");
+                var valve = ValveFor(circuits[i].DnMm);
+                if (valve != null)
+                {
+                    sb.Append(" · ").Append(valve.KindLabel);
+                    if (!string.IsNullOrWhiteSpace(valve.TypeName)) sb.Append(" \"").Append(valve.TypeName).Append("\"");
+                }
                 sb.AppendLine();
             }
             return sb.ToString();

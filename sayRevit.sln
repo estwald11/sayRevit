@@ -6,6 +6,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SayRevit.Claude", "src\SayR
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SayRevit.Addin", "src\SayRevit.Addin\SayRevit.Addin.csproj", "{A1000000-0000-0000-0000-000000000003}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SayRevit.Loader", "src\SayRevit.Loader\SayRevit.Loader.csproj", "{A1000000-0000-0000-0000-000000000005}"
+EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SayRevit.Core.Tests", "tests\SayRevit.Core.Tests\SayRevit.Core.Tests.csproj", "{A1000000-0000-0000-0000-000000000004}"
 EndProject
 Global
@@ -26,6 +28,10 @@ Global
 		{A1000000-0000-0000-0000-000000000003}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1000000-0000-0000-0000-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1000000-0000-0000-0000-000000000003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000000-0000-0000-0000-000000000005}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000000-0000-0000-0000-000000000005}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000000-0000-0000-0000-000000000005}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000000-0000-0000-0000-000000000005}.Release|Any CPU.Build.0 = Release|Any CPU
 		{A1000000-0000-0000-0000-000000000004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{A1000000-0000-0000-0000-000000000004}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1000000-0000-0000-0000-000000000004}.Release|Any CPU.ActiveCfg = Release|Any CPU

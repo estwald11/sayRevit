@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Mechanical;
@@ -38,6 +39,7 @@ namespace SayRevit.Addin.Revit
         public int Pipes { get; set; }
         public int Ducts { get; set; }
         public int Fittings { get; set; }
+        public int Valves { get; set; }
         public List<ElementId> CreatedIds { get; } = new List<ElementId>();
         public List<string> Messages { get; } = new List<string>();
         public List<string> Warnings { get; } = new List<string>();
@@ -45,7 +47,9 @@ namespace SayRevit.Addin.Revit
         public string Summary()
         {
             if (!Succeeded) return "Nessun elemento creato.";
-            return "Creati " + Pipes + " tratti di tubazione, " + Ducts + " tratti di canale e " + Fittings + " raccordi.";
+            var s = "Creati " + Pipes + " tratti di tubazione, " + Ducts + " tratti di canale e " + Fittings + " raccordi";
+            if (Valves > 0) s += ", più " + Valves + (Valves == 1 ? " valvola" : " valvole");
+            return s + ".";
         }
     }
 
@@ -87,10 +91,15 @@ namespace SayRevit.Addin.Revit
                 return _report;
             }
 
+            PrepareValveFamilies(plan.Runs.SelectMany(r => r.Branches)
+                .Select(b => b.Valve)
+                .Where(v => v != null)
+                .Select(v => v.FamilyName));
+
             using (var t = new Transaction(_doc, "sayRevit: crea MEP da testo"))
             {
                 var fho = t.GetFailureHandlingOptions();
-                fho.SetFailuresPreprocessor(new WarningSwallower());
+                fho.SetFailuresPreprocessor(new WarningSwallower(this));
                 fho.SetClearAfterRollback(true);
                 t.SetFailureHandlingOptions(fho);
                 t.Start();
@@ -114,6 +123,7 @@ namespace SayRevit.Addin.Revit
                     }
 
                     _doc.Regenerate();
+                    CheckCreated();
                     t.Commit();
                     _report.Succeeded = true;
                 }
@@ -125,6 +135,8 @@ namespace SayRevit.Addin.Revit
                     _report.Warnings.Add("Errore durante la creazione: " + ex.Message);
                 }
             }
+            if (_report.Succeeded) CheckAfterCommit();
+            FlushDiag();
             return _report;
         }
 
@@ -292,7 +304,7 @@ namespace SayRevit.Addin.Revit
                 var capConn = GetCapConnector(cap);
                 if (capConn == null) throw new InvalidOperationException("la famiglia non ha un connettore tubazione.");
 
-                TrySizeCap(cap, target);
+                TrySizeFitting(cap, target.Radius);
                 _doc.Regenerate();
                 capConn = GetCapConnector(cap);
 
@@ -355,15 +367,15 @@ namespace SayRevit.Addin.Revit
         }
 
         /// <summary>
-        /// Adatta la misura del fondello al tubo. Ogni tentativo viene VERIFICATO sul raggio del
-        /// connettore dopo una rigenerazione: ci si ferma solo quando la misura corrisponde davvero.
-        /// Ordine: raggio del connettore, poi ogni parametro d'istanza dal nome riconducibile al
-        /// diametro — in piedi se è una Lunghezza, in millimetri se è un numero puro (es. "DN" = 50).
+        /// Adatta la misura di un pezzo (fondello, flangia) al tubo. Ogni tentativo viene VERIFICATO
+        /// sul raggio del connettore dopo una rigenerazione: ci si ferma solo quando la misura
+        /// corrisponde davvero. Ordine: raggio del connettore, poi ogni parametro d'istanza dal nome
+        /// riconducibile al diametro — in piedi se è una Lunghezza, in millimetri se è un numero puro
+        /// (es. "DN" = 50).
         /// </summary>
-        private void TrySizeCap(FamilyInstance cap, Connector target)
+        private void TrySizeFitting(FamilyInstance cap, double wantRadius)
         {
-            var wantRadius = target.Radius;
-            if (CapRadiusMatches(cap, wantRadius)) return;
+            if (RadiusMatches(cap, wantRadius)) return;
 
             // 1) raggio del connettore
             try
@@ -376,7 +388,7 @@ namespace SayRevit.Addin.Revit
             {
                 // raggio guidato da parametro: si passa alla ricerca per nome
             }
-            if (CapRadiusMatches(cap, wantRadius)) return;
+            if (RadiusMatches(cap, wantRadius)) return;
 
             // 2) parametri d'istanza
             var keywords = new[] { "dn", "nominal", "durchmesser", "diametro", "diameter", "nennweite" };
@@ -409,11 +421,11 @@ namespace SayRevit.Addin.Revit
                 {
                     continue; // parametro non impostabile: si prova il successivo
                 }
-                if (CapRadiusMatches(cap, wantRadius)) return;
+                if (RadiusMatches(cap, wantRadius)) return;
             }
         }
 
-        private bool CapRadiusMatches(FamilyInstance cap, double wantRadius)
+        private bool RadiusMatches(FamilyInstance cap, double wantRadius)
         {
             try
             {
@@ -436,6 +448,951 @@ namespace SayRevit.Addin.Revit
             {
                 return true; // in dubbio, trattalo come lunghezza (comportamento precedente)
             }
+        }
+
+        // -------------------------------------------------- valvole sugli stacchi
+
+        private List<FamilySymbol> _accessorySymbols;
+        private readonly HashSet<string> _saidOnce = new HashSet<string>();
+
+        /// <summary>
+        /// Avviso detto una volta sola: le valvole si ripetono su ogni stacco e su entrambi i
+        /// collettori, quindi lo stesso problema produrrebbe decine di righe identiche.
+        /// </summary>
+        private void WarnOnce(string message)
+        {
+            if (_saidOnce.Add(message)) _report.Warnings.Add(message);
+        }
+
+        private void NoteOnce(string message)
+        {
+            if (_saidOnce.Add(message)) _report.Messages.Add(message);
+        }
+
+        // Diagnostica dettagliata del montaggio dei pezzi in linea: troppo lunga per la finestra
+        // di riepilogo, finisce in un file accanto alle impostazioni.
+        private readonly List<string> _diag = new List<string>();
+
+        public static string DiagPath
+        {
+            get { return Path.Combine(Path.GetDirectoryName(Settings.FilePath), "diagnostica-valvole.txt"); }
+        }
+
+        private void Diag(string line)
+        {
+            _diag.Add(line);
+        }
+
+        private void FlushDiag()
+        {
+            if (_diag.Count == 0) return;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(DiagPath));
+                File.WriteAllLines(DiagPath, _diag);
+                NoteOnce("Diagnostica del montaggio delle valvole scritta in " + DiagPath);
+            }
+            catch
+            {
+                // non bloccante
+            }
+        }
+
+        /// <summary>Accessori e raccordi per tubazioni caricati nel progetto: le valvole stanno qui.</summary>
+        private List<FamilySymbol> AccessorySymbols()
+        {
+            if (_accessorySymbols != null) return _accessorySymbols;
+            _accessorySymbols = new List<FamilySymbol>();
+            foreach (var category in new[] { BuiltInCategory.OST_PipeAccessory, BuiltInCategory.OST_PipeFitting })
+            {
+                try
+                {
+                    _accessorySymbols.AddRange(new FilteredElementCollector(_doc)
+                        .OfClass(typeof(FamilySymbol))
+                        .OfCategory(category)
+                        .Cast<FamilySymbol>());
+                }
+                catch
+                {
+                    // categoria non disponibile: si prova la successiva
+                }
+            }
+            return _accessorySymbols;
+        }
+
+        /// <summary>Famiglie di flangia per materiale, come per i fondelli; null = nessuna flangia.</summary>
+        private static string FlangeFamilyFor(string pipeTypeName)
+        {
+            var n = TextUtil.Fold(pipeTypeName ?? string.Empty);
+            if (n.Contains("inox")) return "ATZ_NEUTRAL_6_Flansch";
+            if (n.Contains("acciaio nero") || n.Contains("c-stahl") || n.Contains("stahl") || n.Contains("nero"))
+                return "ATZ_C-STAHL-WELD_6_Flansch";
+            return null;
+        }
+
+        /// <summary>
+        /// Inserisce la valvola in linea sullo stacco, allineata all'ASSE del tubo, e — per la boax —
+        /// tra due flange. Lo stacco viene accorciato fino alla faccia del primo pezzo e riprende
+        /// dalla faccia dell'ultimo, così la catena tubo–flangia–valvola–flangia–tubo è continua e
+        /// collegata. I pezzi vengono montati oltre la fine dello stacco, dove non c'è nulla con cui
+        /// interferire, e portati in posizione solo dopo che si è verificato che ci stiano: se
+        /// qualcosa non va, lo stacco resta intero e non si crea geometria a metà.
+        /// </summary>
+        private void PlaceValve(RunContext ctx, MEPCurve stub, XYZ stubStart, XYZ dir, MepBranch branch, MepSize size, string label)
+        {
+            var valve = branch == null ? null : branch.Valve;
+            if (valve == null || stub == null) return;
+
+            var what = label + valve.KindLabel + " DN" + MepSize.Fmt(valve.DnMm) + ": ";
+            if (ctx.Run.Kind != MepKind.Pipe)
+            {
+                WarnOnce(what + "le valvole si inseriscono solo sulle tubazioni.");
+                return;
+            }
+            if (valve.DistanceMm <= 0 || valve.DistanceMm >= branch.LengthMm)
+            {
+                WarnOnce(what + "distanza " + PlanFormatter.Len(valve.DistanceMm) + " fuori dallo stacco (" +
+                         PlanFormatter.Len(branch.LengthMm) + "): non inserita.");
+                return;
+            }
+
+            var symbol = ResolveValveSymbol(valve, what);
+            if (symbol == null) return;
+
+            var center = stubStart + dir * Units.MmToFt(valve.DistanceMm);
+            var stubEnd = stubStart + dir * Units.MmToFt(branch.LengthMm);
+            var pipeRadius = PipeRadius(stub);
+            var roll = valve.RollDegrees * Math.PI / 180.0;
+            // Banco di montaggio sull'asse dello stacco ma oltre la sua fine: il tragitto fino alla
+            // posizione finale resta sull'asse, quindi dentro il piano di lavoro del pezzo.
+            var bench = center + dir * Units.MmToFt(branch.LengthMm + 3000);
+
+            var placed = new List<FamilyInstance>();
+            var body = PlaceInline(symbol, ctx, bench, dir, roll, 0, what);
+            if (body == null) return;
+            placed.Add(body);
+
+            var half = BodyLength(body, dir) / 2.0;
+
+            // Flange prima e dopo: solo per la boax e solo se il materiale del tipo ne ha una definita.
+            double flangeLength = 0;
+            FamilyInstance first = null, second = null;
+            if (valve.WithFlanges)
+            {
+                var flangeSymbol = ResolveFlangeSymbol(ctx, valve, what);
+                if (flangeSymbol != null)
+                {
+                    // stesso rollio della valvola: le forature restano allineate
+                    first = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
+                    second = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(2000), dir, roll, pipeRadius, what);
+                    if (first == null || second == null)
+                    {
+                        WarnOnce(what + "flange non montate: la valvola viene inserita senza.");
+                        DeleteAll(new[] { first, second });
+                        first = second = null;
+                    }
+                    else
+                    {
+                        placed.Add(first);
+                        placed.Add(second);
+                        flangeLength = BodyLength(first, dir);
+                        // il disco della flangia guarda la valvola, il collare guarda il tubo:
+                        // sotto la valvola il disco sta in alto, sopra la valvola sta in basso
+                        OrientFlange(first, dir, PlaneUp(dir, roll), true, what);
+                        OrientFlange(second, dir, PlaneUp(dir, roll), false, what);
+                    }
+                }
+            }
+
+            var reach = half + flangeLength;
+            var reachMm = Units.FtToMm(reach);
+            // Con pezzi a spessore quasi nullo (valvole wafer, flange sottili) non c'è niente da
+            // togliere: restano infilati sul tubo, che non viene tagliato.
+            var cut = reachMm > 1;
+            if (cut && (valve.DistanceMm - reachMm < 1 || valve.DistanceMm + reachMm > branch.LengthMm - 1))
+            {
+                WarnOnce(what + "l'ingombro (" + PlanFormatter.Len(2 * reachMm) + ") non entra nello stacco a " +
+                         PlanFormatter.Len(valve.DistanceMm) + " dall'asse: valvola non inserita.");
+                DeleteAll(placed);
+                return;
+            }
+
+            var nearFace = center - dir * reach;
+            var farFace = center + dir * reach;
+            MEPCurve after = null;
+            if (cut)
+            {
+                if (!TrimCurve(stub, stubStart, nearFace))
+                {
+                    WarnOnce(what + "lo stacco non è stato accorciato per fare posto alla valvola: non inserita.");
+                    DeleteAll(placed);
+                    return;
+                }
+                after = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, farFace, stubEnd, size, label);
+            }
+            else
+            {
+                NoteOnce(what + "i connettori della famiglia distano meno di 1 mm: lo stacco non viene tagliato e i pezzi restano infilati sul tubo.");
+            }
+
+            Diag("  montaggio: taglio dello stacco " + (cut ? "sì" : "no") + ", corpo " + body.Id + " luce " +
+                 PlanFormatter.Len(Units.FtToMm(2 * half)) + (first == null ? ", senza flange" :
+                 ", flange " + first.Id + " e " + second.Id + " spessore " + PlanFormatter.Len(Units.FtToMm(flangeLength))) +
+                 ", facce a " + PlanFormatter.Len(Units.FtToMm((nearFace - stubStart).DotProduct(dir))) + " e " +
+                 PlanFormatter.Len(Units.FtToMm((farFace - stubStart).DotProduct(dir))) + " dall'inizio dello stacco.");
+
+            // dal banco alla posizione definitiva, sempre lungo l'asse dello stacco
+            var moved = CenterAt(body, center, what);
+            if (first != null)
+            {
+                moved &= CenterAt(first, center - dir * (half + flangeLength / 2.0), what);
+                moved &= CenterAt(second, center + dir * (half + flangeLength / 2.0), what);
+            }
+            if (!moved)
+            {
+                WarnOnce(what + "pezzi non portati in posizione: annullo l'inserimento.");
+                DeleteAll(placed);
+                if (after != null) DeleteCurve(after);
+                TrimCurve(stub, stubStart, stubEnd);
+                return;
+            }
+
+            // catena: tubo – flangia – valvola – flangia – tubo
+            if (cut)
+            {
+                Join(stub, first ?? body, nearFace, what);
+                if (first != null) Join(first, body, center - dir * half, what);
+                if (second != null) Join(body, second, center + dir * half, what);
+                if (after != null) Join(second ?? body, after, farFace, what);
+            }
+
+            _report.CreatedIds.Add(body.Id);
+            _report.Valves++;
+            if (first != null && second != null)
+            {
+                _report.CreatedIds.Add(first.Id);
+                _report.CreatedIds.Add(second.Id);
+                _report.Fittings += 2;
+            }
+
+            var ends = CountConnectedEnds(body);
+            Diag("  esito: corpo a " + VecMm(Midpoint(body) - center) + " mm dal centro, estremità collegate " + ends + "/2" +
+                 (first == null ? "" : ", flangia sotto a " + VecMm(Midpoint(first) - (center - dir * (half + flangeLength / 2.0))) +
+                                       " mm, flangia sopra a " + VecMm(Midpoint(second) - (center + dir * (half + flangeLength / 2.0))) + " mm dal previsto") + ".");
+            if (cut && ends < 2)
+                WarnOnce(what + "inserita ma collegata su " + ends + " estremità su 2: controlla la misura del tipo \"" +
+                         symbol.Name + "\" rispetto al tubo.");
+        }
+
+        /// <summary>
+        /// Colloca un pezzo in linea (valvola o flangia) allineato all'asse del tubo.
+        ///
+        /// Le famiglie basate sul livello non si inclinano: Revit accetta la rotazione attorno a
+        /// un asse orizzontale ma la trasforma in silenzio in una rotazione attorno alla verticale.
+        /// Il meccanismo previsto per i pezzi inclinati è la famiglia BASATA SU PIANO DI LAVORO:
+        /// prima della costruzione le famiglie delle valvole e delle flange vengono convertite
+        /// (vedi PrepareValveFamilies) e qui il pezzo viene creato su un piano che contiene l'asse
+        /// del tubo con la direzione di riferimento lungo il tubo. In tutte le famiglie viste il
+        /// flusso è lungo l'X della famiglia, che con la direzione di riferimento finisce sul tubo;
+        /// lo Z della famiglia va sulla normale del piano, scelta in base al rollio richiesto.
+        /// Restano solo rotazioni nel piano (ammesse). Ogni tentativo è verificato sull'asse dei
+        /// connettori; se non è in asse viene cancellato e si ripiega sul livello.
+        /// </summary>
+        private FamilyInstance PlaceInline(FamilySymbol symbol, RunContext ctx, XYZ at, XYZ dir, double roll, double wantRadius, string what)
+        {
+            try
+            {
+                if (!symbol.IsActive)
+                {
+                    symbol.Activate();
+                    _doc.Regenerate();
+                }
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "tipo \"" + symbol.Name + "\" non attivabile: " + ex.Message);
+                return null;
+            }
+
+            dir = dir.Normalize();
+            // dove deve andare lo Z della famiglia (normale del piano) e lo Y (secondo asse del piano)
+            var zDir = PlaneUp(dir, roll);
+            var yDir = zDir.CrossProduct(dir).Normalize();
+            Diag(string.Empty);
+            Diag(what + "famiglia \"" + ModelCatalogReader.SafeFamilyName(symbol) + "\" tipo \"" + symbol.Name +
+                 "\" (" + PlacementTypeOf(symbol) + "): stacco " + Vec(dir) + ", Z famiglia → " + Vec(zDir) + ", Y famiglia → " + Vec(yDir) +
+                 ", rollio " + MepSize.Fmt(Math.Round(roll * 180 / Math.PI)) + "°.");
+
+            var how = "piano di lavoro con direzione";
+            var fi = PlaceOnPlane(symbol, at, dir, zDir, yDir, true, wantRadius, what, how);
+            if (fi == null)
+            {
+                how = "piano di lavoro";
+                fi = PlaceOnPlane(symbol, at, dir, zDir, yDir, false, wantRadius, what, how);
+            }
+            if (fi == null)
+            {
+                how = "livello";
+                fi = PlaceOnLevel(symbol, ctx.Level, at, dir, zDir, yDir, wantRadius, what, how);
+            }
+            if (fi == null)
+            {
+                WarnOnce(what + "\"" + symbol.Name + "\" non si riesce ad allineare all'asse del tubo: non inserita. " +
+                         "Dettagli in " + DiagPath);
+                return null;
+            }
+
+            // riga di controllo: dice come è stato montato e con che asse, utile quando una
+            // famiglia si comporta in modo strano
+            NoteOnce(what + "\"" + symbol.Name + "\" montata su " + how + ": " + EndConnectors(fi).Count +
+                     " connettori, asse " + Vec(AxisOf(fi)) + ", luce " + PlanFormatter.Len(Units.FtToMm(InlineLength(fi))) +
+                     ", ingombro " + ExtentsText(Extents(fi, dir, zDir, yDir)) + ", stacco " + Vec(dir) + ".");
+            return fi;
+        }
+
+        /// <summary>
+        /// Crea il pezzo su un piano di lavoro (X = asse del tubo, Y = yDir, normale = zDir) con o
+        /// senza direzione di riferimento, e lo verifica. Il piano viene eliminato se il tentativo fallisce.
+        /// </summary>
+        private FamilyInstance PlaceOnPlane(FamilySymbol symbol, XYZ at, XYZ dir, XYZ zDir, XYZ yDir, bool withDirection,
+            double wantRadius, string what, string how)
+        {
+            FamilyInstance fi = null;
+            SketchPlane sketch = null;
+            try
+            {
+                var plane = Plane.CreateByOriginAndBasis(at, dir, yDir);
+                sketch = SketchPlane.Create(_doc, plane);
+                fi = withDirection
+                    ? _doc.Create.NewFamilyInstance(at, symbol, dir, sketch,
+                        Autodesk.Revit.DB.Structure.StructuralType.NonStructural)
+                    : _doc.Create.NewFamilyInstance(at, symbol, sketch,
+                        Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                _doc.Regenerate();
+                var ok = Finish(fi, at, dir, zDir, yDir, wantRadius, what, how);
+                if (ok == null) DeleteSketch(sketch);
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Diag("  " + how + ": eccezione: " + ex.Message);
+                Discard(fi);
+                DeleteSketch(sketch);
+                return null;
+            }
+        }
+
+        private FamilyInstance PlaceOnLevel(FamilySymbol symbol, Level level, XYZ at, XYZ dir, XYZ up, XYZ normal,
+            double wantRadius, string what, string how)
+        {
+            FamilyInstance fi = null;
+            try
+            {
+                fi = _doc.Create.NewFamilyInstance(at, symbol, level,
+                    Autodesk.Revit.DB.Structure.StructuralType.NonStructural);
+                _doc.Regenerate();
+                return Finish(fi, at, dir, up, normal, wantRadius, what, how);
+            }
+            catch (Exception ex)
+            {
+                Diag("  " + how + ": eccezione: " + ex.Message);
+                Discard(fi);
+                return null;
+            }
+        }
+
+        private void DeleteSketch(SketchPlane sketch)
+        {
+            if (sketch == null) return;
+            try
+            {
+                _doc.Delete(sketch.Id);
+            }
+            catch
+            {
+                // resta un piano di lavoro vuoto: innocuo
+            }
+        }
+
+        /// <summary>Dimensiona, orienta, porta in posizione e verifica sui connettori; null (col pezzo cancellato) se non è in asse.</summary>
+        private FamilyInstance Finish(FamilyInstance fi, XYZ at, XYZ dir, XYZ up, XYZ normal, double wantRadius, string what, string how)
+        {
+            if (fi == null) return null;
+            if (wantRadius > 0) TrySizeFitting(fi, wantRadius);
+            if (EndConnectors(fi).Count < 2)
+            {
+                WarnOnce(what + "la famiglia \"" + fi.Symbol.Name + "\" non ha due connettori in linea: non si può montare sul tubo.");
+                Diag("  " + how + ": " + EndConnectors(fi).Count + " connettori di estremità, servono 2.");
+                Discard(fi);
+                return null;
+            }
+
+            Diag("  " + how + ", appena creata: " + Describe(fi, at, dir, up, normal));
+            var oriented = Orient(fi, dir, up, how);
+            CenterAt(fi, at, what);
+            var aligned = IsAligned(fi, dir);
+            Diag("  " + how + ", dopo orientamento: " + Describe(fi, at, dir, up, normal) +
+                 " → rotazioni " + (oriented ? "riuscite" : "RIFIUTATE") + ", connettori " + (aligned ? "in asse" : "NON in asse") + ".");
+            if (aligned) return fi;
+            Discard(fi);
+            return null;
+        }
+
+        /// <summary>
+        /// Orienta il pezzo in due rotazioni: prima porta l'asse dei connettori sul tubo (rotazione
+        /// minima), poi gira attorno al tubo finché lo Z della famiglia (o lo Y, se l'asse è lo Z)
+        /// non guarda "su". Così il rollio è lo stesso per ogni pezzo della stessa famiglia e
+        /// dipende solo dal valore scelto, non da come Revit ha creato l'istanza.
+        /// </summary>
+        private bool Orient(FamilyInstance fi, XYZ dir, XYZ up, string how)
+        {
+            var axis = AxisOf(fi);
+            if (axis == null) return false;
+            var d = axis.DotProduct(dir) < 0 ? dir.Negate() : dir;
+
+            var angle = axis.AngleTo(d);
+            if (angle > 1e-6)
+            {
+                var rotAxis = axis.CrossProduct(d);
+                if (rotAxis.GetLength() < 1e-9) rotAxis = PerpendicularTo(axis);
+                if (!TryRotate(fi, Line.CreateUnbound(Midpoint(fi), rotAxis.Normalize()), angle))
+                {
+                    Diag("  " + how + ": rotazione dell'asse sul tubo rifiutata da Revit.");
+                    return false;
+                }
+            }
+
+            XYZ reference;
+            try
+            {
+                var t = fi.GetTransform();
+                reference = Math.Abs(t.BasisZ.DotProduct(d)) < 0.9 ? t.BasisZ : t.BasisY;
+            }
+            catch
+            {
+                return true;
+            }
+            reference = reference - d * reference.DotProduct(d);
+            var wanted = up - d * up.DotProduct(d);
+            if (reference.GetLength() < 1e-9 || wanted.GetLength() < 1e-9) return true;
+            reference = reference.Normalize();
+            wanted = wanted.Normalize();
+            var roll = Math.Atan2(reference.CrossProduct(wanted).DotProduct(d), reference.DotProduct(wanted));
+            if (Math.Abs(roll) < 1e-6) return true;
+            if (!TryRotate(fi, Line.CreateUnbound(Midpoint(fi), d), roll))
+            {
+                Diag("  " + how + ": rollio attorno al tubo rifiutato da Revit.");
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>Lunghezza del pezzo lungo il tubo: la luce tra i connettori; l'ingombro geometrico solo se i connettori coincidono.</summary>
+        private double BodyLength(FamilyInstance fi, XYZ dir)
+        {
+            var byConnectors = InlineLength(fi);
+            if (byConnectors > Units.MmToFt(1)) return byConnectors;
+            var up = PerpendicularTo(dir);
+            var ext = Extents(fi, dir, up, dir.CrossProduct(up).Normalize());
+            var byGeometry = ext == null ? 0 : ext[0];
+            Diag("  connettori coincidenti: come lunghezza si usa l'ingombro lungo il tubo, " + PlanFormatter.Len(Units.FtToMm(byGeometry)) + ".");
+            return byGeometry;
+        }
+
+        /// <summary>Vertici dei solidi dell'istanza (coordinate di modello); vuoto se la famiglia non ha geometria leggibile.</summary>
+        private static List<XYZ> Vertices(FamilyInstance fi)
+        {
+            var list = new List<XYZ>();
+            try
+            {
+                var opt = new Options { DetailLevel = ViewDetailLevel.Fine, ComputeReferences = false, IncludeNonVisibleObjects = false };
+                var ge = fi.get_Geometry(opt);
+                if (ge != null) CollectVertices(ge, list);
+            }
+            catch
+            {
+                // geometria non leggibile
+            }
+            return list;
+        }
+
+        private static void CollectVertices(GeometryElement ge, List<XYZ> list)
+        {
+            foreach (var go in ge)
+            {
+                var inst = go as GeometryInstance;
+                if (inst != null)
+                {
+                    GeometryElement g = null;
+                    try { g = inst.GetInstanceGeometry(); } catch { }
+                    if (g != null) CollectVertices(g, list);
+                    continue;
+                }
+                var solid = go as Solid;
+                if (solid == null || solid.Faces.Size == 0) continue;
+                foreach (Face f in solid.Faces)
+                {
+                    Mesh mesh = null;
+                    try { mesh = f.Triangulate(); } catch { }
+                    if (mesh == null) continue;
+                    foreach (XYZ v in mesh.Vertices) list.Add(v);
+                }
+            }
+        }
+
+        /// <summary>Ingombro della geometria lungo tre direzioni (piedi); null senza geometria.</summary>
+        private static double[] Extents(FamilyInstance fi, XYZ a, XYZ b, XYZ c)
+        {
+            var vs = Vertices(fi);
+            if (vs.Count == 0) return null;
+            var axes = new[] { a, b, c };
+            var ext = new double[3];
+            for (var i = 0; i < 3; i++)
+            {
+                var min = double.MaxValue;
+                var max = double.MinValue;
+                foreach (var v in vs)
+                {
+                    var d = v.DotProduct(axes[i]);
+                    if (d < min) min = d;
+                    if (d > max) max = d;
+                }
+                ext[i] = max - min;
+            }
+            return ext;
+        }
+
+        private static string ExtentsText(double[] ext)
+        {
+            if (ext == null) return "sconosciuto";
+            return "lungo il tubo " + PlanFormatter.Len(Units.FtToMm(ext[0])) + ", di traverso " +
+                   PlanFormatter.Len(Units.FtToMm(ext[1])) + " × " + PlanFormatter.Len(Units.FtToMm(ext[2]));
+        }
+
+        private static string PlacementTypeOf(FamilySymbol symbol)
+        {
+            try
+            {
+                return symbol.Family.FamilyPlacementType.ToString();
+            }
+            catch
+            {
+                return "collocazione sconosciuta";
+            }
+        }
+
+        /// <summary>Riga di diagnostica completa: connettori, orientamento dell'istanza, ingombro, posizione.</summary>
+        private string Describe(FamilyInstance fi, XYZ at, XYZ dir, XYZ up, XYZ normal)
+        {
+            var sb = new System.Text.StringBuilder();
+            try
+            {
+                var lp = fi.Location as LocationPoint;
+                var origin = lp != null ? lp.Point : at;
+                sb.Append("posizione ").Append(VecMm(origin - at)).Append(" mm dal bersaglio");
+                var t = fi.GetTransform();
+                sb.Append("; istanza X ").Append(Vec(t.BasisX)).Append(" Y ").Append(Vec(t.BasisY)).Append(" Z ").Append(Vec(t.BasisZ));
+                var i = 0;
+                foreach (var c in EndConnectors(fi))
+                {
+                    XYZ z = null;
+                    try { z = c.CoordinateSystem.BasisZ; } catch { }
+                    sb.Append("; conn").Append(++i).Append(" a ").Append(VecMm(c.Origin - origin)).Append(" mm, verso ")
+                      .Append(Vec(z)).Append(", r ").Append(MepSize.Fmt(Math.Round(Units.FtToMm(c.Radius), 1))).Append(" mm");
+                }
+                sb.Append("; ingombro ").Append(ExtentsText(Extents(fi, dir, up, normal)));
+            }
+            catch (Exception ex)
+            {
+                sb.Append(" [descrizione interrotta: ").Append(ex.Message).Append("]");
+            }
+            return sb.ToString();
+        }
+
+        private static string VecMm(XYZ v)
+        {
+            if (v == null) return "?";
+            return "(" + MepSize.Fmt(Math.Round(Units.FtToMm(v.X))) + "; " + MepSize.Fmt(Math.Round(Units.FtToMm(v.Y))) +
+                   "; " + MepSize.Fmt(Math.Round(Units.FtToMm(v.Z))) + ")";
+        }
+
+        /// <summary>
+        /// Asse di scorrimento del pezzo: la DIREZIONE del connettore (CoordinateSystem.BasisZ),
+        /// non il segmento che unisce i due connettori. Su corpi sottili — valvola a farfalla,
+        /// flangia — i due connettori sono vicinissimi o sfalsati e quel segmento punta dove capita:
+        /// è così che i pezzi finivano di traverso al tubo. È lo stesso criterio con cui vengono
+        /// orientati i fondelli, che nel modello risultano corretti.
+        /// </summary>
+        private static XYZ AxisOf(FamilyInstance fi)
+        {
+            var cs = EndConnectors(fi);
+            foreach (var c in cs)
+            {
+                try
+                {
+                    var z = c.CoordinateSystem.BasisZ;
+                    if (z != null && z.GetLength() > 1e-9) return z.Normalize();
+                }
+                catch
+                {
+                    // connettore senza sistema di riferimento: si prova il successivo
+                }
+            }
+            if (cs.Count < 2) return null;
+            var v = cs[1].Origin - cs[0].Origin;
+            return v.GetLength() < 1e-9 ? null : v.Normalize();
+        }
+
+        private bool TryRotate(FamilyInstance fi, Line axis, double angle)
+        {
+            try
+            {
+                ElementTransformUtils.RotateElement(_doc, fi.Id, axis, angle);
+                _doc.Regenerate();
+                return true;
+            }
+            catch
+            {
+                // famiglia non orientabile in questa posizione: l'esito viene verificato dal chiamante
+                return false;
+            }
+        }
+
+        /// <summary>Sposta il pezzo finché il punto medio tra i suoi connettori non cade sul centro.</summary>
+        private bool CenterAt(FamilyInstance fi, XYZ center, string what)
+        {
+            var delta = center - Midpoint(fi);
+            if (delta.GetLength() < 1e-9) return true;
+            try
+            {
+                ElementTransformUtils.MoveElement(_doc, fi.Id, delta);
+                _doc.Regenerate();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "pezzo non spostabile in posizione: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static XYZ Midpoint(FamilyInstance fi)
+        {
+            var cs = EndConnectors(fi);
+            if (cs.Count >= 2) return (cs[0].Origin + cs[1].Origin) / 2.0;
+            var lp = fi.Location as LocationPoint;
+            return lp == null ? XYZ.Zero : lp.Point;
+        }
+
+        private static bool IsAligned(FamilyInstance fi, XYZ dir)
+        {
+            var axis = AxisOf(fi);
+            return axis != null && Math.Abs(axis.DotProduct(dir)) > 0.999;
+        }
+
+        /// <summary>Una perpendicolare qualsiasi alla direzione, sempre la stessa a parità di direzione.</summary>
+        private static XYZ PerpendicularTo(XYZ dir)
+        {
+            var up = Math.Abs(dir.Z) > 0.9 ? XYZ.BasisY : XYZ.BasisZ;
+            var p = dir.CrossProduct(up);
+            if (p.GetLength() < 1e-9) p = dir.CrossProduct(XYZ.BasisX);
+            return p.Normalize();
+        }
+
+        /// <summary>
+        /// Asse Y del piano di lavoro: la perpendicolare all'asse del tubo girata del rollio chiesto.
+        /// È così che si ottiene la rotazione attorno all'asse (la boax va messa a 90°) senza dover
+        /// ruotare il pezzo fuori dal suo piano di lavoro, cosa che Revit rifiuta.
+        /// </summary>
+        private static XYZ PlaneUp(XYZ dir, double roll)
+        {
+            var y = PerpendicularTo(dir);
+            if (Math.Abs(roll) < 1e-9) return y;
+            var z = dir.CrossProduct(y).Normalize();
+            return (y * Math.Cos(roll) + z * Math.Sin(roll)).Normalize();
+        }
+
+        /// <summary>
+        /// Gira la flangia in modo che il DISCO (la parte più larga) guardi la valvola e il collare
+        /// il tubo. Il lato del disco si legge dalla geometria: si confronta quanto sporge dal
+        /// proprio asse la geometria vicino a un'estremità e vicino all'altra. Se le due estremità
+        /// sporgono uguali (flangia simmetrica) non c'è nulla da girare.
+        /// </summary>
+        private void OrientFlange(FamilyInstance flange, XYZ dir, XYZ zDir, bool discTowardPlusDir, string what)
+        {
+            var discAtPlus = DiscAtPlusEnd(flange, dir);
+            if (discAtPlus == null)
+            {
+                Diag("  flangia: disco e collare non distinguibili dalla geometria, lasciata com'è.");
+                return;
+            }
+            if (discAtPlus.Value == discTowardPlusDir) return;
+
+            // 180° attorno alla normale del piano di lavoro: resta nel piano, quindi è ammessa anche
+            // per le famiglie basate su piano di lavoro; l'asse del flusso si inverte
+            var ok = TryRotate(flange, Line.CreateUnbound(Midpoint(flange), zDir), Math.PI);
+            var after = DiscAtPlusEnd(flange, dir);
+            if (ok && after != null && after.Value != discTowardPlusDir)
+            {
+                ok = TryRotate(flange, Line.CreateUnbound(Midpoint(flange), PerpendicularTo(dir)), Math.PI);
+                after = DiscAtPlusEnd(flange, dir);
+            }
+            Diag("  flangia girata di 180° per portare il disco verso la valvola: " + (ok ? "riuscita" : "RIFIUTATA") +
+                 ", disco ora " + (after == null ? "?" : after.Value ? "verso +asse" : "verso -asse") + ".");
+            if (!ok) WarnOnce(what + "flangia non girabile: il collare potrebbe guardare la valvola invece del tubo.");
+        }
+
+        /// <summary>
+        /// True se il disco della flangia (la parte che sporge di più dall'asse) sta all'estremità
+        /// verso +dir, false se verso -dir, null se non si distingue.
+        /// </summary>
+        private static bool? DiscAtPlusEnd(FamilyInstance flange, XYZ dir)
+        {
+            var vs = Vertices(flange);
+            if (vs.Count == 0) return null;
+            var m = Midpoint(flange);
+            var min = double.MaxValue;
+            var max = double.MinValue;
+            foreach (var v in vs)
+            {
+                var t = (v - m).DotProduct(dir);
+                if (t < min) min = t;
+                if (t > max) max = t;
+            }
+            var span = max - min;
+            if (span < Units.MmToFt(2)) return null;
+
+            double lowReach = 0, highReach = 0;
+            foreach (var v in vs)
+            {
+                var rel = v - m;
+                var t = rel.DotProduct(dir);
+                var lateral = (rel - dir * t).GetLength();
+                if (t < min + span * 0.3 && lateral > lowReach) lowReach = lateral;
+                if (t > max - span * 0.3 && lateral > highReach) highReach = lateral;
+            }
+            if (Math.Abs(highReach - lowReach) < Units.MmToFt(3)) return null;
+            return highReach > lowReach;
+        }
+
+        /// <summary>Accorcia il tubo al segmento indicato; false se non è possibile.</summary>
+        private bool TrimCurve(MEPCurve curve, XYZ from, XYZ to)
+        {
+            try
+            {
+                var lc = curve.Location as LocationCurve;
+                if (lc == null || from.DistanceTo(to) < TolFt) return false;
+                lc.Curve = Line.CreateBound(from, to);
+                _doc.Regenerate();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>Collega i due elementi nel punto in cui si toccano.</summary>
+        private void Join(Element a, Element b, XYZ point, string what)
+        {
+            if (a == null || b == null) return;
+            var ca = NearestConnector(a, point);
+            var cb = NearestConnector(b, point);
+            if (ca == null || cb == null)
+            {
+                WarnOnce(what + "connettori non trovati nel punto di giunzione: pezzo lasciato scollegato.");
+                return;
+            }
+            try
+            {
+                if (!ca.IsConnectedTo(cb)) ca.ConnectTo(cb);
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "collegamento non riuscito: " + ex.Message);
+            }
+        }
+
+        private static ConnectorManager ConnectorsOf(Element e)
+        {
+            var curve = e as MEPCurve;
+            if (curve != null) return curve.ConnectorManager;
+            var fi = e as FamilyInstance;
+            return fi == null || fi.MEPModel == null ? null : fi.MEPModel.ConnectorManager;
+        }
+
+        private static Connector NearestConnector(Element e, XYZ point)
+        {
+            var cm = ConnectorsOf(e);
+            if (cm == null) return null;
+            Connector best = null;
+            var bestDist = double.MaxValue;
+            foreach (Connector c in cm.Connectors)
+            {
+                if (c.ConnectorType != ConnectorType.End) continue;
+                var d = c.Origin.DistanceTo(point);
+                if (d >= bestDist) continue;
+                bestDist = d;
+                best = c;
+            }
+            return bestDist <= TolFt * 4 ? best : null;
+        }
+
+        private static List<Connector> EndConnectors(Element e)
+        {
+            var list = new List<Connector>();
+            var cm = ConnectorsOf(e);
+            if (cm == null) return list;
+            foreach (Connector c in cm.Connectors)
+            {
+                if (c.ConnectorType == ConnectorType.End) list.Add(c);
+            }
+            return list;
+        }
+
+        private static List<Connector> EndConnectorsAlong(Element e, XYZ dir)
+        {
+            return EndConnectors(e).OrderBy(c => c.Origin.DotProduct(dir)).ToList();
+        }
+
+        /// <summary>Luce che il pezzo occupa sul tubo: distanza tra i connettori misurata sull'asse.</summary>
+        private static double InlineLength(FamilyInstance fi)
+        {
+            var cs = EndConnectors(fi);
+            if (cs.Count < 2) return 0;
+            var v = cs[1].Origin - cs[0].Origin;
+            var axis = AxisOf(fi);
+            return axis == null ? v.GetLength() : Math.Abs(v.DotProduct(axis));
+        }
+
+        private static string Vec(XYZ v)
+        {
+            if (v == null) return "?";
+            return "(" + MepSize.Fmt(Math.Round(v.X, 2)) + "; " + MepSize.Fmt(Math.Round(v.Y, 2)) +
+                   "; " + MepSize.Fmt(Math.Round(v.Z, 2)) + ")";
+        }
+
+        private static double PipeRadius(MEPCurve curve)
+        {
+            try
+            {
+                foreach (Connector c in curve.ConnectorManager.Connectors)
+                {
+                    if (c.ConnectorType == ConnectorType.End) return c.Radius;
+                }
+            }
+            catch
+            {
+                // tubo senza connettori leggibili: le flange restano alla misura del tipo
+            }
+            return 0;
+        }
+
+        private void Discard(FamilyInstance fi)
+        {
+            if (fi == null) return;
+            try
+            {
+                _doc.Delete(fi.Id);
+                _doc.Regenerate();
+            }
+            catch
+            {
+                // niente da fare: l'elemento resta, ma non viene collegato né contato
+            }
+        }
+
+        private void DeleteAll(IEnumerable<FamilyInstance> items)
+        {
+            foreach (var fi in items) Discard(fi);
+        }
+
+        /// <summary>Toglie un tubo creato per errore, anche dal conteggio del rapporto.</summary>
+        private void DeleteCurve(MEPCurve curve)
+        {
+            if (curve == null) return;
+            try
+            {
+                _report.CreatedIds.Remove(curve.Id);
+                if (curve is Pipe) _report.Pipes--; else _report.Ducts--;
+                _doc.Delete(curve.Id);
+                _doc.Regenerate();
+            }
+            catch
+            {
+                // non bloccante
+            }
+        }
+
+        private static int CountConnectedEnds(FamilyInstance valve)
+        {
+            var n = 0;
+            foreach (var c in EndConnectors(valve))
+            {
+                if (c.IsConnected) n++;
+            }
+            return n;
+        }
+
+        /// <summary>Flangia del materiale del tipo di tubazione; null se non ce n'è una definita.</summary>
+        private FamilySymbol ResolveFlangeSymbol(RunContext ctx, MepValve valve, string what)
+        {
+            var pipeType = _doc.GetElement(ctx.TypeId) as MEPCurveType;
+            var typeName = pipeType == null ? string.Empty : pipeType.Name;
+            var familyName = FlangeFamilyFor(typeName);
+            if (familyName == null)
+            {
+                NoteOnce(what + "nessuna flangia definita per \"" + typeName +
+                         "\" (per ora solo inox e acciaio nero): valvola montata senza flange.");
+                return null;
+            }
+
+            var family = AccessorySymbols()
+                .Where(s => string.Equals(ModelCatalogReader.SafeFamilyName(s), familyName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (family.Count == 0)
+            {
+                WarnOnce(what + "famiglia \"" + familyName + "\" non caricata nel progetto: valvola montata senza flange.");
+                return null;
+            }
+            if (family.Count == 1) return family[0];
+
+            var pick = ValveTypeMatcher.Pick(family.Select(s => s.Name).ToList(), valve.DnMm, valve.PnBar);
+            return pick == null
+                ? family.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).First()
+                : family.First(s => s.Name == pick.TypeName);
+        }
+
+        /// <summary>Tipo della famiglia di valvole da usare: quello dell'anteprima, altrimenti sul DN.</summary>
+        private FamilySymbol ResolveValveSymbol(MepValve valve, string what)
+        {
+            var family = AccessorySymbols()
+                .Where(s => string.Equals(ModelCatalogReader.SafeFamilyName(s), valve.FamilyName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (family.Count == 0)
+            {
+                WarnOnce(what + "famiglia \"" + valve.FamilyName + "\" non caricata nel progetto: valvola non inserita.");
+                return null;
+            }
+
+            if (!string.IsNullOrWhiteSpace(valve.TypeName))
+            {
+                var exact = family.FirstOrDefault(s => string.Equals(s.Name, valve.TypeName, StringComparison.OrdinalIgnoreCase));
+                if (exact != null) return exact;
+            }
+
+            var pick = ValveTypeMatcher.Pick(family.Select(s => s.Name).ToList(), valve.DnMm, valve.PnBar);
+            if (pick == null)
+            {
+                var first = family.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).First();
+                WarnOnce(what + "nessun tipo di \"" + valve.FamilyName +
+                         "\" dichiara una misura nel nome: uso \"" + first.Name + "\".");
+                return first;
+            }
+            var chosen = family.First(s => s.Name == pick.TypeName);
+            if (!pick.ExactDn)
+                NoteOnce(what + "nessun tipo DN" + MepSize.Fmt(valve.DnMm) + " nella famiglia: uso \"" + chosen.Name + "\".");
+            return chosen;
         }
 
         // ------------------------------------------------------------- branches
@@ -472,8 +1429,9 @@ namespace SayRevit.Addin.Revit
                 {
                     // Nessun raccordo: il tratto principale resta un tubo unico e lo stacco parte
                     // dall'asse, semplicemente sovrapposto.
-                    CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id,
+                    var free = CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id,
                         point, point + bdir * Units.MmToFt(branch.LengthMm), size, label);
+                    PlaceValve(ctx, free, point, bdir, branch, size, label);
                     continue;
                 }
 
@@ -488,20 +1446,26 @@ namespace SayRevit.Addin.Revit
                 var branchCurve = CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id, point, bEnd, size, label);
                 if (branchCurve == null) continue;
 
-                var branchConnector = FindConnectorAt(branchCurve, point);
-                if (branchConnector == null)
-                {
-                    _report.Warnings.Add(label + "connettore dello stacco non trovato: stacco lasciato scollegato.");
-                    continue;
-                }
-
-                if (ctx.PreferTap)
-                {
-                    if (TryTakeoff(branchConnector, piece, label)) continue;
-                }
-
-                TryTee(ctx, piece, point, branchConnector, label);
+                ConnectBranch(ctx, piece, point, branchCurve, label);
+                // La valvola va inserita DOPO il raccordo: inserendola prima si spezzerebbe lo
+                // stacco e il connettore da raccordare non sarebbe più su questo elemento.
+                PlaceValve(ctx, branchCurve, point, bdir, branch, size, label);
             }
+        }
+
+        /// <summary>Raccorda lo stacco al tratto principale con una presa o con un T.</summary>
+        private void ConnectBranch(RunContext ctx, MEPCurve piece, XYZ point, MEPCurve branchCurve, string label)
+        {
+            var branchConnector = FindConnectorAt(branchCurve, point);
+            if (branchConnector == null)
+            {
+                _report.Warnings.Add(label + "connettore dello stacco non trovato: stacco lasciato scollegato.");
+                return;
+            }
+
+            if (ctx.PreferTap && TryTakeoff(branchConnector, piece, label)) return;
+
+            TryTee(ctx, piece, point, branchConnector, label);
         }
 
         private bool TryTakeoff(Connector branchConnector, MEPCurve main, string label)
@@ -1047,14 +2011,450 @@ namespace SayRevit.Addin.Revit
         /// <summary>Elimina gli avvisi non bloccanti durante la transazione, così non compaiono finestre di dialogo.</summary>
         private sealed class WarningSwallower : IFailuresPreprocessor
         {
+            private readonly RevitPlanBuilder _owner;
+
+            public WarningSwallower(RevitPlanBuilder owner)
+            {
+                _owner = owner;
+            }
+
             public FailureProcessingResult PreprocessFailures(FailuresAccessor failuresAccessor)
             {
                 foreach (var f in failuresAccessor.GetFailureMessages())
                 {
+                    try
+                    {
+                        _owner.Diag("Revit [" + f.GetSeverity() + "]: " + f.GetDescriptionText() + " — elementi " +
+                                    string.Join(", ", f.GetFailingElementIds().Select(id => id.ToString())));
+                    }
+                    catch
+                    {
+                        // solo diagnostica
+                    }
                     if (f.GetSeverity() == FailureSeverity.Warning) failuresAccessor.DeleteWarning(f);
                 }
                 return FailureProcessingResult.Continue;
             }
+        }
+
+        // -------------------------------------------------- famiglie basate su piano di lavoro
+
+        /// <summary>
+        /// Le famiglie basate sul livello non si inclinano: Revit accetta la rotazione attorno a un
+        /// asse orizzontale ma la trasforma in silenzio in una rotazione attorno alla verticale
+        /// ("rotazione riuscita", pezzo ancora orizzontale). Il modo previsto da Revit per montare
+        /// un pezzo su un tubo verticale è la famiglia BASATA SU PIANO DI LAVORO. Prima di
+        /// costruire, alle famiglie di valvole e flange senza quel flag lo si attiva nella famiglia
+        /// stessa (togliendo anche "Sempre verticale") e la si ricarica nel progetto.
+        /// Va fatto FUORI dalla transazione: EditFamily non è ammesso con una transazione aperta.
+        /// </summary>
+        private readonly HashSet<string> _preparedFamilies = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void PrepareValveFamilies(IEnumerable<string> valveFamilies)
+        {
+            var names = valveFamilies
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Concat(new[] { "ATZ_NEUTRAL_6_Flansch", "ATZ_C-STAHL-WELD_6_Flansch" })
+                .Where(n => _preparedFamilies.Add(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            foreach (var name in names)
+            {
+                var symbol = AccessorySymbols().FirstOrDefault(s =>
+                    string.Equals(ModelCatalogReader.SafeFamilyName(s), name, StringComparison.OrdinalIgnoreCase));
+                Family family = null;
+                try { family = symbol == null ? null : symbol.Family; } catch { }
+                if (family == null) continue;
+
+                var vertical = ReadFlag(family, BuiltInParameter.FAMILY_ALWAYS_VERTICAL);
+                var planeBased = ReadFlag(family, BuiltInParameter.FAMILY_WORK_PLANE_BASED);
+                var isFlange = ReadFlag(family, BuiltInParameter.FAMILY_CONTENT_PART_TYPE) == (int)PartType.PipeFlange;
+                Diag("Famiglia \"" + name + "\": sempre verticale = " + FlagText(vertical) + ", basata su piano di lavoro = " + FlagText(planeBased) +
+                     ", categoria " + SafeCategoryName(family) + ", tipo di parte " + PartTypeText(family) + ".");
+                if (planeBased == 1 && vertical != 1 && !isFlange) continue;
+                if (PrepareFamily(family, name, isFlange)) _accessorySymbols = null;
+            }
+        }
+
+        private static string SafeCategoryName(Family family)
+        {
+            try { return family.FamilyCategory == null ? "?" : family.FamilyCategory.Name; } catch { return "?"; }
+        }
+
+        private static string PartTypeText(Family family)
+        {
+            try
+            {
+                var p = family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE);
+                return p == null ? "?" : ((PartType)p.AsInteger()).ToString() + " (" + p.AsInteger() + ")";
+            }
+            catch
+            {
+                return "?";
+            }
+        }
+
+        private static int ReadFlag(Family family, BuiltInParameter bip)
+        {
+            try
+            {
+                var p = family.get_Parameter(bip);
+                return p == null ? -1 : p.AsInteger();
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private static string FlagText(int v)
+        {
+            return v < 0 ? "?" : v == 1 ? "sì" : "no";
+        }
+
+        /// <summary>
+        /// Sistema la famiglia nel suo documento e la ricarica: "Basata su piano di lavoro" (senza
+        /// "Sempre verticale") e, per le flange, un tipo di parte diverso da "Flangia tubo".
+        ///
+        /// Le flange con tipo di parte "Flangia tubo" (PipeFlange) sono GESTITE da Revit: a ogni
+        /// rigenerazione le confronta con le preferenze di instradamento del tipo di tubazione e,
+        /// se lì le flange sono "Nessuna" (come per i tipi saldati), cancella quelle collegate,
+        /// senza avviso, alla chiusura della transazione. È per questo che le flange montate e
+        /// collegate tubo–flangia–valvola sparivano al commit. Con un tipo di parte ordinario
+        /// restano raccordi normali e Revit non le tocca.
+        /// </summary>
+        private bool PrepareFamily(Family family, string name, bool demoteFlange)
+        {
+            Document famDoc = null;
+            var madePlaneBased = false;
+            try
+            {
+                famDoc = _doc.EditFamily(family);
+                using (var t = new Transaction(famDoc, "sayRevit: preparazione famiglia"))
+                {
+                    t.Start();
+                    var wpb = famDoc.OwnerFamily.get_Parameter(BuiltInParameter.FAMILY_WORK_PLANE_BASED);
+                    if (wpb == null || wpb.IsReadOnly)
+                    {
+                        t.RollBack();
+                        WarnOnce("Famiglia \"" + name + "\": non è \"Basata su piano di lavoro\" e il flag non è modificabile: " +
+                                 "sugli stacchi verticali resterà orizzontale. Aprila, attiva \"Basata su piano di lavoro\" e ricaricala.");
+                        return false;
+                    }
+                    if (wpb.AsInteger() != 1)
+                    {
+                        wpb.Set(1);
+                        madePlaneBased = true;
+                    }
+                    var vertical = famDoc.OwnerFamily.get_Parameter(BuiltInParameter.FAMILY_ALWAYS_VERTICAL);
+                    if (vertical != null && !vertical.IsReadOnly && vertical.AsInteger() == 1)
+                    {
+                        vertical.Set(0);
+                        madePlaneBased = true;
+                    }
+
+                    if (demoteFlange)
+                    {
+                        var partType = famDoc.OwnerFamily.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE);
+                        var newType = partType == null || partType.IsReadOnly ? "non modificabile" : null;
+                        if (newType == null)
+                        {
+                            foreach (var candidate in new[] { PartType.Undefined, PartType.Normal, PartType.Union })
+                            {
+                                try
+                                {
+                                    if (partType.Set((int)candidate) && partType.AsInteger() == (int)candidate)
+                                    {
+                                        newType = candidate.ToString();
+                                        break;
+                                    }
+                                }
+                                catch
+                                {
+                                    // valore non ammesso per questa categoria: si prova il successivo
+                                }
+                            }
+                        }
+                        Diag("Famiglia \"" + name + "\": tipo di parte \"Flangia tubo\" → " + (newType ?? "nessun valore accettato") + ".");
+                        if (newType == null || newType == "non modificabile")
+                        {
+                            WarnOnce("Famiglia \"" + name + "\": ha tipo di parte \"Flangia tubo\" e non si riesce a cambiarlo: Revit cancella " +
+                                     "le flange collegate ai tipi di tubazione senza flange nelle preferenze di instradamento. " +
+                                     "Aprila, imposta un altro tipo di parte e ricaricala.");
+                        }
+                        else
+                        {
+                            NoteOnce("Famiglia \"" + name + "\": tipo di parte cambiato da \"Flangia tubo\" a \"" + newType + "\" e ricaricata, " +
+                                     "altrimenti Revit cancella le flange collegate (il tipo di tubazione non ha flange nelle preferenze di instradamento).");
+                        }
+                    }
+                    t.Commit();
+                }
+
+                Family loaded;
+                try
+                {
+                    loaded = famDoc.LoadFamily(_doc, new OverwriteFamily());
+                }
+                catch (Exception)
+                {
+                    // alcune versioni vogliono una transazione aperta sul progetto di destinazione
+                    using (var t2 = new Transaction(_doc, "sayRevit: ricarica famiglia"))
+                    {
+                        t2.Start();
+                        loaded = famDoc.LoadFamily(_doc, new OverwriteFamily());
+                        t2.Commit();
+                    }
+                }
+                Diag("Famiglia \"" + name + "\": " + (madePlaneBased ? "resa basata su piano di lavoro e " : "") + "ricaricata (" +
+                     (loaded == null ? "esito ignoto" : "ok") + ").");
+                if (madePlaneBased)
+                    NoteOnce("Famiglia \"" + name + "\": resa \"Basata su piano di lavoro\" e ricaricata nel progetto, " +
+                             "altrimenti Revit non permette di montarla su tubi non orizzontali.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Diag("Famiglia \"" + name + "\": conversione a piano di lavoro fallita: " + ex.Message);
+                WarnOnce("Famiglia \"" + name + "\": non sono riuscito a renderla \"Basata su piano di lavoro\" (" + ex.Message +
+                         "): sugli stacchi verticali resterà orizzontale. Aprila, attiva il flag e ricaricala.");
+                return false;
+            }
+            finally
+            {
+                if (famDoc != null)
+                {
+                    try { famDoc.Close(false); } catch { }
+                }
+            }
+        }
+
+        private sealed class OverwriteFamily : IFamilyLoadOptions
+        {
+            public bool OnFamilyFound(bool familyInUse, out bool overwriteParameterValues)
+            {
+                overwriteParameterValues = true;
+                return true;
+            }
+
+            public bool OnSharedFamilyFound(Family sharedFamily, bool familyInUse, out FamilySource source, out bool overwriteParameterValues)
+            {
+                source = FamilySource.Family;
+                overwriteParameterValues = true;
+                return true;
+            }
+        }
+
+        // -------------------------------------------------- interasse automatico
+
+        /// <summary>
+        /// Interasse minimo senza interferenze: per ogni circuito si monta valvola (e flange) in una
+        /// zona di prova, si misura l'ingombro reale di tutti i pezzi, si annulla, e si lascia al
+        /// piano il calcolo (<see cref="ManifoldPlan.ApplyAutoSpacing"/>). Va chiamato PRIMA di
+        /// ToParseResult, perché l'interasse decide le posizioni degli stacchi.
+        /// </summary>
+        public void ResolveAutoSpacing(ManifoldPlan plan)
+        {
+            if (plan == null || !plan.AutoSpacing) return;
+            try
+            {
+                LoadCollections();
+                PrepareValveFamilies(new[] { plan.BallValveFamily, plan.ButterflyValveFamily });
+
+                var footprints = new List<StubFootprint>();
+                var cache = new Dictionary<string, StubFootprint>();
+                foreach (var dn in plan.CircuitDnsMm())
+                {
+                    var fp = StubFootprint.PipeOnly(dn, plan.CircuitLengthMm);
+                    var valve = plan.ValveFor(dn);
+                    if (valve != null)
+                    {
+                        var key = valve.FamilyName + "|" + valve.TypeName + "|" + valve.WithFlanges + "|" + valve.RollDegrees + "|" + valve.DistanceMm + "|" + dn;
+                        StubFootprint measured;
+                        if (!cache.TryGetValue(key, out measured))
+                        {
+                            measured = MeasureFootprint(plan, valve, dn);
+                            cache[key] = measured;
+                        }
+                        fp = fp.Union(measured);
+                    }
+                    footprints.Add(fp);
+                }
+
+                var headerRadius = plan.EffectiveHeaderDnMm / 2.0 + 5; // esterno approssimato
+                var r = plan.ApplyAutoSpacing(footprints, headerRadius);
+                NoteOnce("Interasse automatico: " + MepSize.Fmt(r.SpacingMm) + " mm (minimo richiesto " + MepSize.Fmt(plan.SpacingFloorMm) + " mm).");
+                foreach (var n in r.Notes) NoteOnce(n);
+                foreach (var w in r.Warnings) WarnOnce(w);
+                Diag("Interasse automatico: " + MepSize.Fmt(r.SpacingMm) + " mm.");
+            }
+            catch (Exception ex)
+            {
+                WarnOnce("Interasse automatico non calcolato (" + ex.Message + "): uso " + MepSize.Fmt(plan.SpacingMm) + " mm.");
+            }
+        }
+
+        /// <summary>
+        /// Ingombro reale (mm, riferito all'asse dello stacco e al collettore) di valvola e flange di
+        /// un circuito, misurato montandole in una zona di prova dentro una transazione annullata.
+        /// </summary>
+        private StubFootprint MeasureFootprint(ManifoldPlan plan, MepValve valve, double dnMm)
+        {
+            var level = _levels == null ? null : _levels.FirstOrDefault();
+            var pipeType = _pipeTypes == null ? null
+                : _pipeTypes.FirstOrDefault(t => t.Name == plan.PipeTypeName) ?? _pipeTypes.FirstOrDefault();
+            if (level == null || pipeType == null) return null;
+
+            var dir = plan.CircuitDirection == DirectionKind.Down ? XYZ.BasisZ.Negate() : XYZ.BasisZ;
+            var roll = valve.RollDegrees * Math.PI / 180.0;
+            var axisPoint = new XYZ(0, 0, Units.MmToFt(60000)); // zona di prova, lontana dal modello
+            var center = axisPoint + dir * Units.MmToFt(valve.DistanceMm);
+            var what = "misura " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + ": ";
+            var ctx = new RunContext { Level = level, TypeId = pipeType.Id, Run = new MepRun { Kind = MepKind.Pipe }, Dir = dir };
+
+            StubFootprint fp = null;
+            using (var t = new Transaction(_doc, "sayRevit: misura ingombro valvola"))
+            {
+                t.Start();
+                try
+                {
+                    var pieces = new List<FamilyInstance>();
+                    var symbol = ResolveValveSymbol(valve, what);
+                    var body = symbol == null ? null : PlaceInline(symbol, ctx, center, dir, roll, 0, what);
+                    if (body != null)
+                    {
+                        pieces.Add(body);
+                        var half = BodyLength(body, dir) / 2.0;
+                        CenterAt(body, center, what);
+                        if (valve.WithFlanges)
+                        {
+                            var flangeSymbol = ResolveFlangeSymbol(ctx, valve, what);
+                            if (flangeSymbol != null)
+                            {
+                                var pipeRadius = Units.MmToFt(dnMm / 2.0);
+                                var first = PlaceInline(flangeSymbol, ctx, center - dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
+                                var second = PlaceInline(flangeSymbol, ctx, center + dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
+                                if (first != null && second != null)
+                                {
+                                    var fl = BodyLength(first, dir);
+                                    OrientFlange(first, dir, PlaneUp(dir, roll), true, what);
+                                    OrientFlange(second, dir, PlaneUp(dir, roll), false, what);
+                                    CenterAt(first, center - dir * (half + fl / 2.0), what);
+                                    CenterAt(second, center + dir * (half + fl / 2.0), what);
+                                    pieces.Add(first);
+                                    pieces.Add(second);
+                                }
+                            }
+                        }
+                    }
+
+                    var along = new[] { double.MaxValue, double.MinValue };
+                    var side = new[] { double.MaxValue, double.MinValue };
+                    var up = new[] { double.MaxValue, double.MinValue };
+                    var any = false;
+                    foreach (var piece in pieces)
+                    {
+                        foreach (var v in Vertices(piece))
+                        {
+                            var rel = v - axisPoint;
+                            Grow(along, rel.X);
+                            Grow(side, rel.Y);
+                            Grow(up, rel.DotProduct(dir));
+                            any = true;
+                        }
+                    }
+                    if (any)
+                    {
+                        fp = new StubFootprint
+                        {
+                            AlongMinMm = Units.FtToMm(along[0]), AlongMaxMm = Units.FtToMm(along[1]),
+                            SideMinMm = Units.FtToMm(side[0]), SideMaxMm = Units.FtToMm(side[1]),
+                            UpMinMm = Units.FtToMm(up[0]), UpMaxMm = Units.FtToMm(up[1])
+                        };
+                        Diag("Ingombro " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + " (" + pieces.Count + " pezzi): " + fp);
+                    }
+                    else
+                    {
+                        Diag("Ingombro " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + ": nessun pezzo montabile, si considera solo il tubo.");
+                    }
+                }
+                finally
+                {
+                    t.RollBack();
+                }
+            }
+            return fp;
+        }
+
+        private static void Grow(double[] range, double v)
+        {
+            if (v < range[0]) range[0] = v;
+            if (v > range[1]) range[1] = v;
+        }
+
+        /// <summary>A fine costruzione: gli elementi creati esistono ancora? (Revit può cancellarne risolvendo un errore.)</summary>
+        private void CheckCreated()
+        {
+            var missing = 0;
+            var flanges = 0;
+            var valves = 0;
+            _beforeCommit.Clear();
+            foreach (var id in _report.CreatedIds)
+            {
+                var e = _doc.GetElement(id);
+                if (e == null)
+                {
+                    missing++;
+                    Diag("Elemento " + id + " creato ma non più presente prima del commit.");
+                    continue;
+                }
+                var fi = e as FamilyInstance;
+                if (fi == null) continue;
+                _beforeCommit[id] = Midpoint(fi);
+                var fam = TextUtil.Fold(ModelCatalogReader.SafeFamilyName(fi.Symbol));
+                if (fam.Contains("flansch") || fam.Contains("flangia")) flanges++;
+                else if (fi.Category != null && fi.Category.Id.Value == (long)BuiltInCategory.OST_PipeAccessory) valves++;
+            }
+            Diag(string.Empty);
+            Diag("Verifica finale: " + _report.CreatedIds.Count + " elementi creati, " + missing + " mancanti, " +
+                 valves + " accessori (valvole), " + flanges + " flange.");
+            if (missing > 0) WarnOnce(missing + " elementi creati risultano cancellati prima del salvataggio: vedi " + DiagPath);
+        }
+
+        // posizione (punto medio tra i connettori) di ogni pezzo prima del commit, per confronto dopo
+        private readonly Dictionary<ElementId, XYZ> _beforeCommit = new Dictionary<ElementId, XYZ>();
+
+        /// <summary>
+        /// Dopo il commit: Revit chiude la transazione con una rigenerazione completa e con la
+        /// risoluzione degli errori, che può cancellare o spostare elementi senza che il codice
+        /// dentro la transazione se ne accorga. Qui si confronta con quanto verificato prima.
+        /// </summary>
+        private void CheckAfterCommit()
+        {
+            var missing = new List<string>();
+            var moved = new List<string>();
+            foreach (var id in _report.CreatedIds.ToList())
+            {
+                var e = _doc.GetElement(id);
+                if (e == null)
+                {
+                    missing.Add(id.ToString());
+                    _report.CreatedIds.Remove(id);
+                    continue;
+                }
+                var fi = e as FamilyInstance;
+                XYZ before;
+                if (fi == null || !_beforeCommit.TryGetValue(id, out before)) continue;
+                var delta = Midpoint(fi) - before;
+                if (delta.GetLength() > Units.MmToFt(1))
+                    moved.Add(ModelCatalogReader.SafeFamilyName(fi.Symbol) + " " + id + " di " + VecMm(delta) + " mm");
+            }
+            Diag("Dopo il commit: " + missing.Count + " elementi spariti" + (missing.Count == 0 ? "" : " (" + string.Join(", ", missing) + ")") +
+                 ", " + moved.Count + " pezzi spostati" + (moved.Count == 0 ? "." : ": " + string.Join("; ", moved) + "."));
+            if (missing.Count > 0)
+                WarnOnce(missing.Count + " elementi creati sono stati cancellati da Revit alla chiusura della transazione: vedi " + DiagPath);
+            if (moved.Count > 0)
+                WarnOnce(moved.Count + " pezzi sono stati spostati da Revit alla chiusura della transazione: vedi " + DiagPath);
         }
     }
 }

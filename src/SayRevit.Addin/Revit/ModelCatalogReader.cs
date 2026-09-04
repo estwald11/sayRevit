@@ -55,6 +55,12 @@ namespace SayRevit.Addin.Revit
                 c.Levels.Add(lv.Name);
             }
 
+            // Valvole e simili: normalmente accessori per tubazioni. Se il progetto non ne ha,
+            // si ripiega sui raccordi, dove qualche libreria colloca le stesse famiglie.
+            c.PipeAccessories.AddRange(ReadFamilies(doc, BuiltInCategory.OST_PipeAccessory));
+            if (c.PipeAccessories.Count == 0)
+                c.PipeAccessories.AddRange(ReadFamilies(doc, BuiltInCategory.OST_PipeFitting));
+
             try
             {
                 var gen = doc.ActiveView?.GenLevel;
@@ -77,6 +83,45 @@ namespace SayRevit.Addin.Revit
             catch
             {
                 return ConnectorProfileType.Invalid;
+            }
+        }
+
+        /// <summary>Famiglie caricate in una categoria, con i nomi dei tipi di ciascuna.</summary>
+        private static List<CatalogFamily> ReadFamilies(Document doc, BuiltInCategory category)
+        {
+            var list = new List<CatalogFamily>();
+            try
+            {
+                var groups = new FilteredElementCollector(doc)
+                    .OfClass(typeof(FamilySymbol))
+                    .OfCategory(category)
+                    .Cast<FamilySymbol>()
+                    .GroupBy(s => SafeFamilyName(s))
+                    .Where(g => !string.IsNullOrWhiteSpace(g.Key))
+                    .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase);
+                foreach (var g in groups)
+                {
+                    var family = new CatalogFamily { Name = g.Key };
+                    family.TypeNames.AddRange(g.Select(s => s.Name).OrderBy(n => n, StringComparer.CurrentCultureIgnoreCase));
+                    list.Add(family);
+                }
+            }
+            catch
+            {
+                // categoria non disponibile in questo documento
+            }
+            return list;
+        }
+
+        public static string SafeFamilyName(ElementType type)
+        {
+            try
+            {
+                return type.FamilyName;
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
 

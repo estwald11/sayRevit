@@ -40,6 +40,7 @@ namespace SayRevit.Core.Parsing
                     sb.Append(", lunghezza ").Append(Len(b.LengthMm));
                     sb.Append(", direzione ").Append(DirName(b.Direction, true, r.Kind));
                     if (!b.Connect) sb.Append(b.Count == 1 ? ", non raccordato (sovrapposto)" : ", non raccordati (sovrapposti)");
+                    if (b.Valve != null) sb.Append(", ").Append(b.Valve);
                     if (b.PositionsMm.Count > 0)
                     {
                         sb.Append(", a ");

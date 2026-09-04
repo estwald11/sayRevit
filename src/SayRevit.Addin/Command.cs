@@ -72,7 +72,16 @@ namespace SayRevit.Addin
                 }
             }
 
-            var report = new RevitPlanBuilder(doc).Build(window.Result.Plan, options);
+            var plan = window.Result.Plan;
+            var builder = new RevitPlanBuilder(doc);
+            if (window.ManifoldMode && window.ManifoldPlan != null && window.ManifoldPlan.AutoSpacing)
+            {
+                // l'interasse automatico si misura sul modello: si risolve qui e si rigenera il piano
+                builder.ResolveAutoSpacing(window.ManifoldPlan);
+                var resolved = window.ManifoldPlan.ToParseResult();
+                if (resolved.Success) plan = resolved.Plan;
+            }
+            var report = builder.Build(plan, options);
 
             // In modalità Collettore la creazione riuscita e pulita non interrompe l'utente con
             // il riepilogo; il dialogo resta per gli errori e per gli avvisi (che vanno visti).

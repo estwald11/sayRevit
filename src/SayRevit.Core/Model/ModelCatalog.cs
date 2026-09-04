@@ -30,6 +30,14 @@ namespace SayRevit.Core.Model
         public bool HasTakeoffs { get; set; }
     }
 
+    /// <summary>Una famiglia caricata nel progetto con i nomi dei suoi tipi (es. le valvole).</summary>
+    public sealed class CatalogFamily
+    {
+        public string Name { get; set; }
+
+        public List<string> TypeNames { get; } = new List<string>();
+    }
+
     public sealed class CatalogSystem
     {
         public string Name { get; set; }
@@ -46,6 +54,9 @@ namespace SayRevit.Core.Model
         public List<CatalogType> DuctTypes { get; } = new List<CatalogType>();
         public List<CatalogSystem> PipingSystems { get; } = new List<CatalogSystem>();
         public List<CatalogSystem> DuctSystems { get; } = new List<CatalogSystem>();
+
+        /// <summary>Famiglie di accessori per tubazioni (valvole e simili) caricate nel progetto.</summary>
+        public List<CatalogFamily> PipeAccessories { get; } = new List<CatalogFamily>();
         public List<string> Levels { get; } = new List<string>();
         public string ActiveLevel { get; set; }
         public string ProjectUnitsNote { get; set; }

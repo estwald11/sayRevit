@@ -48,6 +48,9 @@ namespace SayRevit.Addin.UI
         /// <summary>Risultato dell'interpretazione confermato con "Crea".</summary>
         public ParseResult Result { get; private set; }
 
+        /// <summary>Il collettore parametrico dell'ultima anteprima (per l'interasse automatico, risolto in Revit).</summary>
+        public ManifoldPlan ManifoldPlan { get; private set; }
+
         public string SelectedLevel => _level.SelectedItem as string;
 
         /// <summary>
@@ -64,9 +67,9 @@ namespace SayRevit.Addin.UI
 
             Title = "sayRevit – tubazioni e canali da testo";
             Width = 760;
-            Height = 640;
+            Height = 720;
             MinWidth = 600;
-            MinHeight = 480;
+            MinHeight = 520;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
             FontSize = 13;
@@ -302,6 +305,7 @@ namespace SayRevit.Addin.UI
         {
             if (!ManifoldMode) return;
             var plan = _manifoldPanel.BuildPlan();
+            ManifoldPlan = plan;
             var result = plan.ToParseResult();
             Result = result;
 

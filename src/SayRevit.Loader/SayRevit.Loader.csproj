@@ -1,32 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    Versione di Revit di destinazione: dotnet build -p:RevitVersion=2024|2025|2026|2027
-    2024 -> .NET Framework 4.8 ; 2025/2026 -> .NET 8 (Windows) ; 2027 -> .NET 10 (Windows)
-    Il framework deve coincidere con il runtime su cui gira Revit (RevitAPI.runtimeconfig.json nella
-    cartella di Revit): usare scripts/install.ps1, che lo rileva automaticamente.
+    Caricatore "a caldo" di sayRevit. È l'unico assembly che Revit carica direttamente (e quindi
+    blocca su disco): a ogni clic sul pulsante legge SayRevit.Addin.dll e le sue dipendenze dalla
+    cartella di installazione, le carica in memoria ed esegue il comando. Così l'add-in si può
+    ricompilare e reinstallare con Revit aperto: il codice nuovo gira dal clic successivo.
+    Stesse regole di compilazione dell'add-in (RevitVersion / RevitFramework / RevitApiDir).
   -->
   <PropertyGroup>
     <RevitVersion Condition="'$(RevitVersion)' == ''">2025</RevitVersion>
-    <!-- Framework: derivato dalla versione di Revit, oppure forzato con -p:RevitFramework=net8.0-windows
-         (lo script install.ps1 lo legge dal runtime effettivo dell'installazione di Revit). -->
     <RevitFramework Condition="'$(RevitFramework)' == '' And '$(RevitVersion)' == '2024'">net48</RevitFramework>
     <RevitFramework Condition="'$(RevitFramework)' == '' And ('$(RevitVersion)' == '2025' Or '$(RevitVersion)' == '2026')">net8.0-windows</RevitFramework>
     <RevitFramework Condition="'$(RevitFramework)' == ''">net10.0-windows</RevitFramework>
     <TargetFramework>$(RevitFramework)</TargetFramework>
-    <!-- L'interfaccia WPF è costruita da codice (nessun XAML): bastano i riferimenti alle librerie,
-         così il progetto si compila anche su Linux/macOS senza l'SDK WindowsDesktop. -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
-    <RootNamespace>SayRevit.Addin</RootNamespace>
-    <AssemblyName>SayRevit.Addin</AssemblyName>
+    <RootNamespace>SayRevit.Loader</RootNamespace>
+    <AssemblyName>SayRevit.Loader</AssemblyName>
     <PlatformTarget>x64</PlatformTarget>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <OutputPath>../../artifacts/$(RevitVersion)/</OutputPath>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <Description>Add-in Revit: da descrizione testuale a tubazioni e canali.</Description>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <Description>sayRevit: caricatore a caldo dell'add-in.</Description>
   </PropertyGroup>
-  <!-- Riferimenti all'API di Revit: dalla cartella di installazione se indicata con
-       -p:RevitApiDir="C:\Program Files\Autodesk\Revit 2027" (sempre coerente con il runtime di quel Revit),
-       altrimenti dai pacchetti NuGet Nice3point (utile per compilare senza Revit installato). -->
   <ItemGroup Condition="'$(RevitApiDir)' != ''">
     <Reference Include="RevitAPI">
       <HintPath>$(RevitApiDir)/RevitAPI.dll</HintPath>
@@ -51,7 +45,6 @@
     <FrameworkReference Include="Microsoft.WindowsDesktop.App.WPF" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="../SayRevit.Core/SayRevit.Core.csproj" />
-    <ProjectReference Include="../SayRevit.Claude/SayRevit.Claude.csproj" />
+    <None Include="SayRevit.addin" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
