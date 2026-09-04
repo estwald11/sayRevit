@@ -181,6 +181,7 @@ namespace SayRevit.Core.Tests
         [Fact]
         public void DistanzaOltreLoStacco_Avvisa()
         {
+            // vale per chi usa la lunghezza generica (il diretto, predefinito)
             var plan = Plan(20);
             plan.CircuitLengthMm = 300;
             plan.ValveDistanceMm = 400;

@@ -18,8 +18,25 @@ namespace SayRevit.Core.Model
             DnMm = dnMm;
         }
 
+        public ManifoldCircuit(double dnMm, CircuitKind kind)
+        {
+            DnMm = dnMm;
+            Kind = kind;
+        }
+
         /// <summary>Diametro nominale del circuito in millimetri (0 = riga ancora vuota).</summary>
         public double DnMm { get; set; }
+
+        /// <summary>
+        /// Tipologia idraulica: diretto, miscelato a 3 vie, miscelato a 2 vie (iniezione) o senza
+        /// pompa. Decide i componenti sullo stacco oltre all'intercettazione (vedi <see cref="CircuitKinds"/>).
+        /// </summary>
+        public CircuitKind Kind { get; set; } = CircuitKinds.Default;
+
+        public CircuitKindInfo KindInfo
+        {
+            get { return CircuitKinds.Info(Kind); }
+        }
 
         /// <summary>Etichetta facoltativa del circuito (es. "bagno"); se vuota si usa "C1", "C2"…</summary>
         public string Name { get; set; }
@@ -89,8 +106,54 @@ namespace SayRevit.Core.Model
             return ValidCircuits().Select(c => c.DnMm).ToList();
         }
 
-        /// <summary>Lunghezza di ogni circuito a partire dal collettore (mm).</summary>
+        /// <summary>
+        /// Lunghezza generica di ogni circuito a partire dall'asse del collettore (mm). Non vale per
+        /// le tipologie che fissano la fine dello stacco sulla valvola: il senza pompa (tubo dopo la
+        /// valvola, <see cref="NoPumpPipeAfterValveMm"/>) e il cieco (fine alla seconda flangia).
+        /// </summary>
         public double CircuitLengthMm { get; set; } = 500;
+
+        /// <summary>
+        /// Circuito senza pompa: lunghezza del tubo DOPO la valvola (mm), dalla faccia d'uscita
+        /// dell'ultimo pezzo (seconda flangia della boax, uscita della sfera) alla fine dello stacco.
+        /// Vale sia sulla mandata sia sul ritorno. La lunghezza totale dello stacco si conosce solo
+        /// in Revit, quando l'ingombro reale della valvola è misurato.
+        /// </summary>
+        public double NoPumpPipeAfterValveMm { get; set; } = 2000;
+
+        /// <summary>
+        /// Spazio provvisorio riservato a valvola e flange (mm) per stimare la lunghezza totale di uno
+        /// stacco che fissa la sua fine sulla valvola, prima che Revit ne misuri l'ingombro reale.
+        /// </summary>
+        public double ValveAssemblyAllowanceMm { get; set; } = 300;
+
+        /// <summary>Lunghezza dello stacco (mm) per il circuito dato, secondo la sua tipologia (provvisoria se fissata sulla valvola).</summary>
+        public double CircuitLengthFor(ManifoldCircuit circuit)
+        {
+            if (circuit == null) return CircuitLengthMm;
+            var after = PipeAfterValveFor(circuit);
+            if (after.HasValue) return ValveAxisDistanceMm + ValveAssemblyAllowanceMm + after.Value;
+            return CircuitLengthMm;
+        }
+
+        /// <summary>
+        /// Lunghezza del tubo dopo la valvola se la tipologia la fissa E la valvola c'è davvero:
+        /// il valore impostato per il senza pompa, zero per il cieco (si ferma alla flangia).
+        /// Senza valvola la regola non ha un riferimento e si torna alla lunghezza generica.
+        /// </summary>
+        public double? PipeAfterValveFor(ManifoldCircuit circuit)
+        {
+            if (circuit == null || ValveFor(circuit) == null) return null;
+            if (circuit.KindInfo.IsBlind) return 0;
+            return circuit.KindInfo.UsesPipeAfterValve ? NoPumpPipeAfterValveMm : (double?)null;
+        }
+
+        /// <summary>Valvola del circuito: quella del suo DN, se la tipologia la prevede.</summary>
+        public MepValve ValveFor(ManifoldCircuit circuit)
+        {
+            if (circuit == null || !circuit.KindInfo.HasShutoffValve) return null;
+            return ValveFor(circuit.DnMm);
+        }
 
         /// <summary>Sporgenza del collettore oltre il BORDO del primo e dell'ultimo circuito (mm).</summary>
         public double OverhangMm { get; set; } = 50;
@@ -315,6 +378,8 @@ namespace SayRevit.Core.Model
             if (circuits.Count == 0) return ParseResult.Fail("Aggiungi almeno un circuito indicando il DN.");
             if (SpacingMm <= 0) return ParseResult.Fail("L'interasse tra i circuiti deve essere maggiore di zero.");
             if (CircuitLengthMm <= 0) return ParseResult.Fail("La lunghezza dei circuiti deve essere maggiore di zero.");
+            if (circuits.Any(c => c.KindInfo.UsesPipeAfterValve) && NoPumpPipeAfterValveMm <= 0)
+                return ParseResult.Fail("La lunghezza del tubo dopo la valvola (circuito senza pompa) deve essere maggiore di zero.");
 
             var headerDn = EffectiveHeaderDnMm;
             if (headerDn <= 0) return ParseResult.Fail("DN del collettore non valido.");
@@ -326,7 +391,7 @@ namespace SayRevit.Core.Model
             // Sfasamento: il PRIMO collettore porta gli stacchi non sfasati,
             // il secondo quelli sfasati di mezzo interasse.
             for (var i = 0; i < circuits.Count; i++)
-                run.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, positions[i]));
+                run.Branches.Add(MakeCircuitBranch(circuits[i], i, positions[i]));
 
             var plan = new MepPlan { SourceText = Summary() };
             plan.Runs.Add(run);
@@ -399,8 +464,61 @@ namespace SayRevit.Core.Model
                                     MepSize.Fmt(minSpacing) + "): i circuiti potrebbero sovrapporsi tra loro.");
 
             CollectValveMessages(circuits, headerDn, result);
+            CollectCircuitKindMessages(circuits, result);
 
             return result;
+        }
+
+        /// <summary>Circuiti validi raggruppati per tipologia, nell'ordine di <see cref="CircuitKinds.All"/>.</summary>
+        public List<KeyValuePair<CircuitKindInfo, List<ManifoldCircuit>>> CircuitsByKind()
+        {
+            var circuits = ValidCircuits();
+            return CircuitKinds.All
+                .Select(info => new KeyValuePair<CircuitKindInfo, List<ManifoldCircuit>>(info, circuits.Where(c => c.Kind == info.Kind).ToList()))
+                .Where(kv => kv.Value.Count > 0)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Note sulle tipologie dei circuiti: quali sono presenti, con quali componenti, e cosa di
+        /// quei componenti viene modellato oggi (solo l'intercettazione: pompe, valvole di
+        /// regolazione e bypass sono il passo successivo e vengono dichiarati, non taciuti).
+        /// </summary>
+        private void CollectCircuitKindMessages(List<ManifoldCircuit> circuits, ParseResult result)
+        {
+            var groups = CircuitsByKind();
+            foreach (var kv in groups)
+            {
+                var labels = kv.Value.Select(c => CircuitLabel(c, circuits.IndexOf(c))).ToList();
+                result.Notes.Add(kv.Key.Label + " (" + string.Join(", ", labels) + "): " +
+                                 CircuitKinds.SupplyChain(kv.Key.Kind) + ".");
+            }
+
+            var noPump = circuits.Where(c => c.KindInfo.UsesPipeAfterValve).ToList();
+            if (noPump.Any(c => PipeAfterValveFor(c).HasValue))
+                result.Notes.Add("Circuiti senza pompa: tubo lungo " + MepSize.Fmt(NoPumpPipeAfterValveMm) +
+                                 " mm dopo la valvola (dalla seconda flangia, o dall'uscita della sfera), su mandata e ritorno; " +
+                                 "la fine dello stacco viene fissata in Revit sull'ingombro reale della valvola.");
+            else if (noPump.Count > 0)
+                result.Warnings.Add("Circuiti senza pompa senza valvola: la regola del tubo dopo la valvola non ha un riferimento, " +
+                                    "uso la lunghezza generica dei circuiti (" + MepSize.Fmt(CircuitLengthMm) + " mm).");
+
+            var blind = circuits.Where(c => c.KindInfo.IsBlind).ToList();
+            if (blind.Any(c => PipeAfterValveFor(c).HasValue))
+                result.Notes.Add("Circuiti ciechi: lo stacco si ferma alla seconda flangia della valvola (o all'uscita della sfera), " +
+                                 "nessun tubo a valle, su mandata e ritorno.");
+            else if (blind.Count > 0)
+                result.Warnings.Add("Circuiti ciechi senza valvola: non c'è una flangia a cui fermarsi, " +
+                                    "uso la lunghezza generica dei circuiti (" + MepSize.Fmt(CircuitLengthMm) + " mm).");
+
+            var pending = new List<string>();
+            if (circuits.Any(c => c.KindInfo.HasPump)) pending.Add("pompe");
+            if (circuits.Any(c => c.Kind == CircuitKind.MixThreeWay)) pending.Add("valvole miscelatrici a 3 vie");
+            if (circuits.Any(c => c.Kind == CircuitKind.MixTwoWayInjection)) pending.Add("valvole a 2 vie");
+            if (circuits.Any(c => c.KindInfo.HasBypass)) pending.Add("bypass mandata/ritorno");
+            if (pending.Count > 0)
+                result.Warnings.Add("Tipologie: " + string.Join(", ", pending) +
+                                    " non ancora modellati in Revit; sugli stacchi viene inserita solo l'intercettazione.");
         }
 
         /// <summary>
@@ -415,7 +533,9 @@ namespace SayRevit.Core.Model
                 return;
             }
 
-            var dns = circuits.Select(c => c.DnMm).Distinct().OrderBy(d => d).ToList();
+            var valved = circuits.Where(c => c.KindInfo.HasShutoffValve).ToList();
+            if (valved.Count == 0) return;
+            var dns = valved.Select(c => c.DnMm).Distinct().OrderBy(d => d).ToList();
             var hasBall = dns.Any(d => d <= BallValveMaxDnMm + 0.001);
             var hasButterfly = dns.Any(d => d > BallValveMaxDnMm + 0.001);
 
@@ -476,7 +596,9 @@ namespace SayRevit.Core.Model
             if (ValveDistanceMm <= 0)
                 result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dal bordo: cadono dentro il collettore (DN" +
                                     MepSize.Fmt(headerDn) + "). Usa una distanza positiva, almeno 50 mm.");
-            if (ValveAxisDistanceMm >= CircuitLengthMm)
+            // la lunghezza generica vale solo per i circuiti che non la fissano altrimenti
+            var generic = valved.Any(c => !PipeAfterValveFor(c).HasValue);
+            if (generic && ValveAxisDistanceMm >= CircuitLengthMm)
                 result.Warnings.Add("Valvole a " + MepSize.Fmt(ValveDistanceMm) + " mm dal bordo (" + MepSize.Fmt(ValveAxisDistanceMm) +
                                     " mm dall'asse): oltre la lunghezza dei circuiti (" + MepSize.Fmt(CircuitLengthMm) +
                                     " mm). Non verranno inserite.");
@@ -496,13 +618,17 @@ namespace SayRevit.Core.Model
             };
         }
 
-        private MepBranch MakeCircuitBranch(double dnMm, int index, double positionMm)
+        private MepBranch MakeCircuitBranch(ManifoldCircuit circuit, int index, double positionMm)
         {
+            var dnMm = circuit.DnMm;
             var branch = new MepBranch
             {
                 Size = MepSize.Round(dnMm, true),
                 Count = 1,
-                LengthMm = CircuitLengthMm,
+                // lunghezza secondo la tipologia: per il senza pompa e il cieco è provvisoria, la
+                // fissa Revit sulla faccia d'uscita della valvola (più il tubo a valle, se c'è)
+                LengthMm = CircuitLengthFor(circuit),
+                LengthAfterValveMm = PipeAfterValveFor(circuit),
                 // I circuiti non vengono raccordati: solo sovrapposti al collettore, che resta
                 // un tubo unico (il T di Revit ridimensionerebbe l'innesto alla misura del circuito).
                 Connect = false,
@@ -511,7 +637,7 @@ namespace SayRevit.Core.Model
                 Direction = CircuitDirection == DirectionKind.Alternate
                     ? (index % 2 == 0 ? DirectionKind.Left : DirectionKind.Right)
                     : CircuitDirection,
-                Valve = ValveFor(dnMm)
+                Valve = ValveFor(circuit)
             };
             branch.PositionsMm.Add(positionMm);
             return branch;
@@ -530,8 +656,10 @@ namespace SayRevit.Core.Model
             var ret = MakeHeaderRun(headerDn);
 
             var shift = SpacingMm / 2.0;
+            // stessa tipologia sul ritorno: stesso tubo dopo la valvola per il senza pompa, stessa
+            // fine alla flangia per il cieco
             for (var i = 0; i < circuits.Count; i++)
-                ret.Branches.Add(MakeCircuitBranch(circuits[i].DnMm, i, supplyPositions[i] + shift));
+                ret.Branches.Add(MakeCircuitBranch(circuits[i], i, supplyPositions[i] + shift));
 
             ret.OffsetAlongMm = 0;             // basi perfettamente allineate
             // Alla sinistra della direzione: con la base verso +X il secondo collettore sta
@@ -565,13 +693,17 @@ namespace SayRevit.Core.Model
             {
                 sb.Append("  ").Append(CircuitLabel(circuits[i], i));
                 sb.Append(": DN").Append(MepSize.Fmt(circuits[i].DnMm));
+                sb.Append(" ").Append(circuits[i].KindInfo.Label.ToLowerInvariant());
                 sb.Append(" a ").Append(MepSize.Fmt(positions[i])).Append(" mm dall'inizio");
-                var valve = ValveFor(circuits[i].DnMm);
+                var valve = ValveFor(circuits[i]);
                 if (valve != null)
                 {
                     sb.Append(" · ").Append(valve.KindLabel);
                     if (!string.IsNullOrWhiteSpace(valve.TypeName)) sb.Append(" \"").Append(valve.TypeName).Append("\"");
                 }
+                var after = PipeAfterValveFor(circuits[i]);
+                if (after.HasValue && after.Value > 0) sb.Append(" · tubo dopo la valvola ").Append(MepSize.Fmt(after.Value)).Append(" mm");
+                else if (after.HasValue) sb.Append(" · si ferma alla flangia");
                 sb.AppendLine();
             }
             return sb.ToString();
@@ -579,11 +711,15 @@ namespace SayRevit.Core.Model
 
         // ------------------------------------------------------- serializzazione
 
-        /// <summary>DN dei circuiti in forma "20;16;16" per le impostazioni.</summary>
+        /// <summary>
+        /// Circuiti in forma "20:direct;16:mix3;25:nopump" per le impostazioni: DN e codice della
+        /// tipologia (<see cref="CircuitKinds.Code"/>). Il DN nudo ("20") è ancora accettato in
+        /// lettura e vale come diretto, così i file salvati prima delle tipologie restano validi.
+        /// </summary>
         public string CircuitsToString()
         {
             return string.Join(";", Circuits.Where(c => c != null && c.IsValid)
-                .Select(c => c.DnMm.ToString("0.##", CultureInfo.InvariantCulture)));
+                .Select(c => c.DnMm.ToString("0.##", CultureInfo.InvariantCulture) + ":" + CircuitKinds.Code(c.Kind)));
         }
 
         public void LoadCircuitsFromString(string value)
@@ -592,10 +728,28 @@ namespace SayRevit.Core.Model
             if (string.IsNullOrWhiteSpace(value)) return;
             foreach (var part in value.Split(';'))
             {
-                double dn;
-                if (double.TryParse(part.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out dn) && dn > 0)
-                    Circuits.Add(new ManifoldCircuit(dn));
+                var circuit = ParseCircuit(part);
+                if (circuit != null) Circuits.Add(circuit);
             }
+        }
+
+        /// <summary>"20:mix3" → DN20 miscelato a 3 vie; "20" → DN20 diretto; null se il DN non è valido.</summary>
+        public static ManifoldCircuit ParseCircuit(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            var t = text.Trim();
+            var kindText = string.Empty;
+            var colon = t.IndexOf(':');
+            if (colon >= 0)
+            {
+                kindText = t.Substring(colon + 1);
+                t = t.Substring(0, colon);
+            }
+            double dn;
+            if (!double.TryParse(t.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out dn) || dn <= 0) return null;
+            CircuitKind kind;
+            if (!CircuitKinds.TryParse(kindText, out kind)) kind = CircuitKinds.Default;
+            return new ManifoldCircuit(dn, kind);
         }
     }
 }

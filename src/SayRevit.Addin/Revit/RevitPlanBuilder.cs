@@ -249,14 +249,26 @@ namespace SayRevit.Addin.Revit
         private void CapRunEnds(RunContext ctx, string label)
         {
             if (ctx.Run.Kind != MepKind.Pipe) return;
+            var symbol = ResolveCapSymbol(ctx, label, "estremità lasciate aperte");
+            if (symbol == null) return;
 
+            PlaceCap(symbol, ctx, ctx.Pieces, ctx.Start, label + "inizio: ");
+            PlaceCap(symbol, ctx, ctx.Pieces, ctx.End, label + "fine: ");
+        }
+
+        /// <summary>
+        /// Tipo di fondello per il materiale del tipo di tubazione del tratto; null (con messaggio,
+        /// una volta sola) se il materiale non ne prevede uno o la famiglia non è caricata.
+        /// </summary>
+        private FamilySymbol ResolveCapSymbol(RunContext ctx, string label, string consequence)
+        {
             var typeName = (_doc.GetElement(ctx.TypeId) as MEPCurveType)?.Name ?? string.Empty;
             var familyName = CapFamilyFor(typeName);
             if (familyName == null)
             {
-                _report.Messages.Add(label + "nessuna famiglia definita per \"" + typeName +
-                                     "\" (per ora solo inox e acciaio nero): estremità lasciate aperte.");
-                return;
+                NoteOnce(label + "nessuna famiglia di fondello definita per \"" + typeName +
+                         "\" (per ora solo inox e acciaio nero): " + consequence + ".");
+                return null;
             }
 
             var symbol = new FilteredElementCollector(_doc)
@@ -266,23 +278,21 @@ namespace SayRevit.Addin.Revit
                 .FirstOrDefault(s => string.Equals(s.Family?.Name, familyName, StringComparison.OrdinalIgnoreCase));
             if (symbol == null)
             {
-                _report.Warnings.Add(label + "famiglia \"" + familyName + "\" non caricata nel progetto: estremità lasciate aperte.");
-                return;
+                WarnOnce(label + "famiglia \"" + familyName + "\" non caricata nel progetto: " + consequence + ".");
+                return null;
             }
             if (!symbol.IsActive)
             {
                 symbol.Activate();
                 _doc.Regenerate();
             }
-
-            PlaceCap(symbol, ctx, ctx.Start, label + "inizio: ");
-            PlaceCap(symbol, ctx, ctx.End, label + "fine: ");
+            return symbol;
         }
 
-        private void PlaceCap(FamilySymbol symbol, RunContext ctx, XYZ point, string label)
+        private void PlaceCap(FamilySymbol symbol, RunContext ctx, IEnumerable<MEPCurve> pieces, XYZ point, string label)
         {
             Connector target = null;
-            foreach (var piece in ctx.Pieces)
+            foreach (var piece in pieces)
             {
                 target = FindConnectorAt(piece, point);
                 if (target != null) break;
@@ -560,12 +570,18 @@ namespace SayRevit.Addin.Revit
             if (symbol == null) return;
 
             var center = stubStart + dir * Units.MmToFt(valve.DistanceMm);
-            var stubEnd = stubStart + dir * Units.MmToFt(branch.LengthMm);
+            // Fine dello stacco com'è stato creato; se la tipologia fissa il tubo DOPO la valvola
+            // (circuito diretto) la fine definitiva si decide più sotto, dalla faccia d'uscita
+            // dell'ultimo pezzo, e questa resta solo il ripiego se il montaggio fallisce.
+            var originalEnd = stubStart + dir * Units.MmToFt(branch.LengthMm);
+            var stubEnd = originalEnd;
+            var afterMm = branch.LengthAfterValveMm;
             var pipeRadius = PipeRadius(stub);
             var roll = valve.RollDegrees * Math.PI / 180.0;
             // Banco di montaggio sull'asse dello stacco ma oltre la sua fine: il tragitto fino alla
             // posizione finale resta sull'asse, quindi dentro il piano di lavoro del pezzo.
-            var bench = center + dir * Units.MmToFt(branch.LengthMm + 3000);
+            var farthestMm = Math.Max(branch.LengthMm, valve.DistanceMm + (afterMm ?? 0) + 1000);
+            var bench = center + dir * Units.MmToFt(farthestMm + 3000);
 
             var placed = new List<FamilyInstance>();
             var body = PlaceInline(symbol, ctx, bench, dir, roll, 0, what);
@@ -609,7 +625,10 @@ namespace SayRevit.Addin.Revit
             // Con pezzi a spessore quasi nullo (valvole wafer, flange sottili) non c'è niente da
             // togliere: restano infilati sul tubo, che non viene tagliato.
             var cut = reachMm > 1;
-            if (cut && (valve.DistanceMm - reachMm < 1 || valve.DistanceMm + reachMm > branch.LengthMm - 1))
+            // con il tubo dopo la valvola fissato, la fine dello stacco si adatta: conta solo che
+            // il pezzo non arrivi al collettore
+            var tooFar = !afterMm.HasValue && valve.DistanceMm + reachMm > branch.LengthMm - 1;
+            if (cut && (valve.DistanceMm - reachMm < 1 || tooFar))
             {
                 WarnOnce(what + "l'ingombro (" + PlanFormatter.Len(2 * reachMm) + ") non entra nello stacco a " +
                          PlanFormatter.Len(valve.DistanceMm) + " dall'asse: valvola non inserita.");
@@ -619,6 +638,11 @@ namespace SayRevit.Addin.Revit
 
             var nearFace = center - dir * reach;
             var farFace = center + dir * reach;
+            // Tubo dopo la valvola di lunghezza fissa: la fine dello stacco è la faccia d'uscita
+            // dell'ultimo pezzo (seconda flangia, o la valvola stessa) più quella lunghezza.
+            // A zero (stacco cieco) lo stacco si ferma alla flangia: nessun tubo a valle.
+            if (afterMm.HasValue) stubEnd = farFace + dir * Units.MmToFt(afterMm.Value);
+            var endsAtValve = afterMm.HasValue && afterMm.Value < 1;
             MEPCurve after = null;
             if (cut)
             {
@@ -628,18 +652,26 @@ namespace SayRevit.Addin.Revit
                     DeleteAll(placed);
                     return;
                 }
-                after = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, farFace, stubEnd, size, label);
+                if (!endsAtValve)
+                    after = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, farFace, stubEnd, size, label);
             }
             else
             {
                 NoteOnce(what + "i connettori della famiglia distano meno di 1 mm: lo stacco non viene tagliato e i pezzi restano infilati sul tubo.");
+                // niente da tagliare, ma la fine dello stacco va comunque portata alla misura voluta
+                // (al centro del pezzo, se si ferma alla valvola)
+                if (afterMm.HasValue && !TrimCurve(stub, stubStart, stubEnd))
+                    WarnOnce(what + "lo stacco non è stato portato a " + PlanFormatter.Len(afterMm.Value) + " dopo la valvola.");
             }
 
             Diag("  montaggio: taglio dello stacco " + (cut ? "sì" : "no") + ", corpo " + body.Id + " luce " +
                  PlanFormatter.Len(Units.FtToMm(2 * half)) + (first == null ? ", senza flange" :
                  ", flange " + first.Id + " e " + second.Id + " spessore " + PlanFormatter.Len(Units.FtToMm(flangeLength))) +
                  ", facce a " + PlanFormatter.Len(Units.FtToMm((nearFace - stubStart).DotProduct(dir))) + " e " +
-                 PlanFormatter.Len(Units.FtToMm((farFace - stubStart).DotProduct(dir))) + " dall'inizio dello stacco.");
+                 PlanFormatter.Len(Units.FtToMm((farFace - stubStart).DotProduct(dir))) + " dall'inizio dello stacco" +
+                 (endsAtValve ? ", si ferma alla faccia d'uscita (nessun tubo a valle)" :
+                  afterMm.HasValue ? ", tubo dopo la valvola " + PlanFormatter.Len(afterMm.Value) + " (stacco totale " +
+                                     PlanFormatter.Len(Units.FtToMm((stubEnd - stubStart).DotProduct(dir))) + ")" : "") + ".");
 
             // dal banco alla posizione definitiva, sempre lungo l'asse dello stacco
             var moved = CenterAt(body, center, what);
@@ -653,7 +685,7 @@ namespace SayRevit.Addin.Revit
                 WarnOnce(what + "pezzi non portati in posizione: annullo l'inserimento.");
                 DeleteAll(placed);
                 if (after != null) DeleteCurve(after);
-                TrimCurve(stub, stubStart, stubEnd);
+                TrimCurve(stub, stubStart, originalEnd);
                 return;
             }
 
@@ -1429,8 +1461,8 @@ namespace SayRevit.Addin.Revit
                 {
                     // Nessun raccordo: il tratto principale resta un tubo unico e lo stacco parte
                     // dall'asse, semplicemente sovrapposto.
-                    var free = CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id,
-                        point, point + bdir * Units.MmToFt(branch.LengthMm), size, label);
+                    var freeEnd = point + bdir * Units.MmToFt(branch.LengthMm);
+                    var free = CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id, point, freeEnd, size, label);
                     PlaceValve(ctx, free, point, bdir, branch, size, label);
                     continue;
                 }
@@ -2263,10 +2295,13 @@ namespace SayRevit.Addin.Revit
 
                 var footprints = new List<StubFootprint>();
                 var cache = new Dictionary<string, StubFootprint>();
-                foreach (var dn in plan.CircuitDnsMm())
+                foreach (var circuit in plan.ValidCircuits())
                 {
-                    var fp = StubFootprint.PipeOnly(dn, plan.CircuitLengthMm);
-                    var valve = plan.ValveFor(dn);
+                    // lunghezza e valvola secondo la tipologia: il cieco non ha valvola, il
+                    // diretto è lungo quanto serve al tubo dopo la valvola
+                    var dn = circuit.DnMm;
+                    var fp = StubFootprint.PipeOnly(dn, plan.CircuitLengthFor(circuit));
+                    var valve = plan.ValveFor(circuit);
                     if (valve != null)
                     {
                         var key = valve.FamilyName + "|" + valve.TypeName + "|" + valve.WithFlanges + "|" + valve.RollDegrees + "|" + valve.DistanceMm + "|" + dn;

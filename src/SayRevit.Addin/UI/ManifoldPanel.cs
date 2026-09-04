@@ -56,6 +56,7 @@ namespace SayRevit.Addin.UI
             Margin = new Thickness(0, 2, 0, 4)
         };
         private readonly TextBox _circuitLength = new TextBox();
+        private readonly TextBox _noPumpPipeAfterValve = new TextBox();
         private readonly ComboBox _circuitDirection = new ComboBox();
         private readonly CheckBox _withReturn = new CheckBox();
         private readonly TextBox _returnOffset = new TextBox();
@@ -243,7 +244,7 @@ namespace SayRevit.Addin.UI
 
             panel.Children.Add(new TextBlock
             {
-                Text = "aggiungi un circuito e indicane il DN",
+                Text = "aggiungi un circuito, indicane il DN e la tipologia",
                 Foreground = Brushes.Gray,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 0, 12, 0)
@@ -297,6 +298,13 @@ namespace SayRevit.Addin.UI
                                    "compresi gli stacchi del ritorno interlacciati.";
 
             panel.Children.Add(Labeled("Lunghezza circuiti (mm):", _circuitLength, 70));
+            _circuitLength.ToolTip = "Lunghezza generica degli stacchi dall'asse del collettore.\n" +
+                                     "Non vale per il senza pompa (tubo dopo la valvola) né per il cieco (si ferma alla flangia).";
+
+            panel.Children.Add(Labeled("Senza pompa: tubo dopo la valvola (mm):", _noPumpPipeAfterValve, 70));
+            _noPumpPipeAfterValve.Text = "2000";
+            _noPumpPipeAfterValve.ToolTip = "Circuito senza pompa: lunghezza del tubo dopo la valvola, dalla seconda flangia della boax\n" +
+                                            "(o dall'uscita della sfera) alla fine dello stacco. Vale su mandata e ritorno. Predefinito 2000 mm.";
 
             foreach (var d in CircuitDirections) _circuitDirection.Items.Add(d.Key);
             _circuitDirection.SelectedIndex = 0;
@@ -320,6 +328,7 @@ namespace SayRevit.Addin.UI
             _autoSpacing.Checked += (s, e) => Notify();
             _autoSpacing.Unchecked += (s, e) => Notify();
             _circuitLength.TextChanged += (s, e) => Notify();
+            _noPumpPipeAfterValve.TextChanged += (s, e) => Notify();
             _returnOffset.TextChanged += (s, e) => Notify();
             _circuitDirection.SelectionChanged += (s, e) => Notify();
 
@@ -488,10 +497,27 @@ namespace SayRevit.Addin.UI
         {
             public FrameworkElement Container;
             public TextBox Dn;
+            public ComboBox Kind;
+
+            /// <summary>Tipologia scelta nella tendina; diretto se la selezione manca.</summary>
+            public CircuitKind SelectedKind
+            {
+                get
+                {
+                    var i = Kind == null ? -1 : Kind.SelectedIndex;
+                    return i >= 0 && i < CircuitKinds.All.Count ? CircuitKinds.All[i].Kind : CircuitKinds.Default;
+                }
+            }
         }
 
         /// <summary>Aggiunge una riga circuito; <paramref name="dnMm"/> a 0 lascia il campo vuoto.</summary>
         private void AddCircuit(double dnMm, bool focus)
+        {
+            AddCircuit(dnMm, CircuitKinds.Default, focus);
+        }
+
+        /// <summary>Aggiunge una riga circuito con DN e tipologia (diretto, mix 3 vie, mix 2 vie, senza pompa).</summary>
+        private void AddCircuit(double dnMm, CircuitKind kind, bool focus)
         {
             var row = new CircuitRow();
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
@@ -523,6 +549,26 @@ namespace SayRevit.Addin.UI
                 }
             };
             panel.Children.Add(row.Dn);
+
+            // Tipologia del circuito: decide i componenti sullo stacco oltre all'intercettazione.
+            row.Kind = new ComboBox
+            {
+                Width = 170,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            foreach (var info in CircuitKinds.All)
+                row.Kind.Items.Add(new ComboBoxItem { Content = info.Label, ToolTip = info.Description });
+            var kindIndex = 0;
+            for (var i = 0; i < CircuitKinds.All.Count; i++)
+            {
+                if (CircuitKinds.All[i].Kind == kind) kindIndex = i;
+            }
+            row.Kind.SelectedIndex = kindIndex;
+            row.Kind.ToolTip = "Tipologia del circuito:\n" +
+                               string.Join("\n", CircuitKinds.All.Select(k => "• " + k.Label + ": " + CircuitKinds.SupplyChain(k.Kind)));
+            row.Kind.SelectionChanged += (s, e) => Notify();
+            panel.Children.Add(row.Kind);
 
             var remove = new Button
             {
@@ -627,6 +673,7 @@ namespace SayRevit.Addin.UI
                 SpacingMm = ParseNumber(_spacing.Text, 150),
                 AutoSpacing = _autoSpacing.IsChecked == true,
                 CircuitLengthMm = ParseNumber(_circuitLength.Text, 500),
+                NoPumpPipeAfterValveMm = ParseNumber(_noPumpPipeAfterValve.Text, 2000),
                 HeaderDirection = DirectionKind.PlusX, // direzione fissa: +X (est)
                 CircuitDirection = CircuitDirections[Math.Max(_circuitDirection.SelectedIndex, 0)].Value,
                 PipeTypeName = _pipeType.SelectedItem as string,
@@ -653,7 +700,7 @@ namespace SayRevit.Addin.UI
             foreach (var row in _circuits)
             {
                 var dn = ParseDn(row.Dn.Text);
-                if (dn > 0) plan.Circuits.Add(new ManifoldCircuit(dn));
+                if (dn > 0) plan.Circuits.Add(new ManifoldCircuit(dn, row.SelectedKind));
             }
             return plan;
         }
@@ -673,6 +720,7 @@ namespace SayRevit.Addin.UI
                 _spacing.Text = settings.ManifoldSpacingMm.ToString("0.##", CultureInfo.InvariantCulture);
                 _autoSpacing.IsChecked = settings.ManifoldAutoSpacing;
                 _circuitLength.Text = settings.ManifoldCircuitLengthMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _noPumpPipeAfterValve.Text = settings.ManifoldNoPumpPipeAfterValveMm.ToString("0.##", CultureInfo.InvariantCulture);
                 _circuitDirection.SelectedIndex = Math.Max(0, IndexOf(CircuitDirections, settings.ManifoldCircuitDirection));
 
                 _withReturn.IsChecked = settings.ManifoldWithReturn;
@@ -709,7 +757,7 @@ namespace SayRevit.Addin.UI
 
                 var stored = new ManifoldPlan();
                 stored.LoadCircuitsFromString(settings.ManifoldCircuits);
-                foreach (var c in stored.Circuits) AddCircuit(c.DnMm, false);
+                foreach (var c in stored.Circuits) AddCircuit(c.DnMm, c.Kind, false);
             }
             finally
             {
@@ -726,6 +774,7 @@ namespace SayRevit.Addin.UI
             settings.ManifoldSpacingMm = plan.SpacingMm;
             settings.ManifoldAutoSpacing = plan.AutoSpacing;
             settings.ManifoldCircuitLengthMm = plan.CircuitLengthMm;
+            settings.ManifoldNoPumpPipeAfterValveMm = plan.NoPumpPipeAfterValveMm;
             settings.ManifoldCircuitDirection = plan.CircuitDirection.ToString();
             settings.ManifoldCircuits = plan.CircuitsToString();
             settings.ManifoldPipeTypeName = plan.PipeTypeName ?? string.Empty;

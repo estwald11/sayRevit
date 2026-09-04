@@ -26,8 +26,10 @@ namespace SayRevit.Addin
         /// <summary>Se true l'interasse è il minimo senza interferenze, calcolato in Revit; ManifoldSpacingMm fa da pavimento.</summary>
         public bool ManifoldAutoSpacing { get; set; } = true;
         public double ManifoldCircuitLengthMm { get; set; } = 500;
+        /// <summary>Circuito senza pompa: tubo dopo la valvola (dalla seconda flangia), mandata e ritorno (mm).</summary>
+        public double ManifoldNoPumpPipeAfterValveMm { get; set; } = 2000;
         public string ManifoldCircuitDirection { get; set; } = "Down";
-        /// <summary>DN dei circuiti separati da ";" (es. "20;16;16").</summary>
+        /// <summary>Circuiti separati da ";" come DN:tipologia (es. "20:direct;16:mix3;16:nopump"); il DN nudo vale come diretto.</summary>
         public string ManifoldCircuits { get; set; } = string.Empty;
         /// <summary>Tipo di tubazione scelto nella sezione collettore (scelta deterministica).</summary>
         public string ManifoldPipeTypeName { get; set; } = string.Empty;
@@ -97,6 +99,7 @@ namespace SayRevit.Addin
                 case "ManifoldSpacingMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var sp)) s.ManifoldSpacingMm = sp; break;
                 case "ManifoldAutoSpacing": s.ManifoldAutoSpacing = v == "true"; break;
                 case "ManifoldCircuitLengthMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var cl)) s.ManifoldCircuitLengthMm = cl; break;
+                case "ManifoldNoPumpPipeAfterValveMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var np)) s.ManifoldNoPumpPipeAfterValveMm = np; break;
                 case "ManifoldCircuitDirection": s.ManifoldCircuitDirection = v; break;
                 case "ManifoldCircuits": s.ManifoldCircuits = v; break;
                 case "ManifoldPipeTypeName": s.ManifoldPipeTypeName = v; break;
@@ -132,6 +135,7 @@ namespace SayRevit.Addin
                     "ManifoldSpacingMm=" + ManifoldSpacingMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldAutoSpacing=" + (ManifoldAutoSpacing ? "true" : "false"),
                     "ManifoldCircuitLengthMm=" + ManifoldCircuitLengthMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldNoPumpPipeAfterValveMm=" + ManifoldNoPumpPipeAfterValveMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldCircuitDirection=" + ManifoldCircuitDirection,
                     "ManifoldCircuits=" + (ManifoldCircuits ?? string.Empty),
                     "ManifoldPipeTypeName=" + (ManifoldPipeTypeName ?? string.Empty),

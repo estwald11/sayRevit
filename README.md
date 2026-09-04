@@ -20,8 +20,26 @@ runs in a single transaction (one Undo step), and created elements are selected 
 
 ## Manifold mode
 
-- Circuits are entered one per row by DN; the pipe material/type is picked from the
-  project's loaded types (exact-name match).
+- Circuits are entered one per row by DN and **circuit type**; the pipe material/type is picked
+  from the project's loaded types (exact-name match).
+- **Circuit types** (per circuit, default *direct*), each defining the components on the supply
+  stub from the header outwards (the return stub always carries a shut-off valve):
+  - *Diretto (no mix)* — shut-off valve → pump; circuit at header temperature.
+  - *Mix 3 vie* — shut-off → 3-way mixing valve fed also by a supply/return bypass → pump.
+  - *Mix 2 vie (iniezione)* — shut-off → 2-way valve on the primary → bypass → secondary pump.
+  - *Senza pompa* — shut-off valve only, the circuit is driven by the primary; the pipe **after
+    the valve** is fixed (see below).
+  - *Cieco* — blind stub: shut-off valve only and the stub **stops at the second flange** (or at
+    the ball valve outlet), no pipe downstream.
+  The preview lists the types in use with their component chains. Today the shut-off valve is
+  modelled in Revit; pumps, mixing/2-way valves and bypasses are declared as a warning until
+  their families are wired in. Settings store circuits as `DN:type`
+  (`20:direct;16:mix3;25:mix2;32:nopump;25:blind`); a bare DN from older settings files is read as *direct*.
+- **Pipe after the valve**: for *senza pompa* circuits the pipe from the outlet face of the last
+  mounted piece (second flange of the boax, or the ball valve outlet) to the end of the stub is
+  2000 mm long (a field), on the supply and on the return stub alike; for *cieco* circuits that
+  length is zero. The plan carries a provisional stub length; the builder sets the real end once
+  the valve assembly is measured. The other types use the generic circuit length.
 - Header DN is computed from **D = √(1.5·(S₁+S₂+…)/0.785)** on the circuit cross-sections,
   then resolved to the type's size with the smallest inner diameter ≥ D. Manual override
   available.
@@ -117,7 +135,7 @@ unloadable `AssemblyLoadContext`; on Revit 2024 (.NET Framework) old copies stay
 src/SayRevit.Core     intent model (MepPlan, ManifoldPlan), IT/EN rule-based parser, preview formatter  [netstandard2.0]
 src/SayRevit.Claude   Claude parser with structured output                                              [netstandard2.0, Anthropic SDK]
 src/SayRevit.Addin    Revit add-in: ribbon, WPF UI, model catalog reader, element builder               [net48 / net8.0-windows / net10.0-windows]
-tests/                xunit tests (113), OS-independent
+tests/                xunit tests (151), OS-independent
 src/SayRevit.Loader/  hot loader: the only assembly Revit loads directly (see below)
 scripts/              install.ps1 / uninstall.ps1
 ```

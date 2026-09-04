@@ -133,6 +133,15 @@ namespace SayRevit.Core.Model
         public DirectionKind Direction { get; set; } = DirectionKind.Default;
 
         /// <summary>
+        /// Lunghezza del tubo DOPO la valvola (mm), dalla faccia d'uscita dell'ultimo pezzo montato
+        /// (seconda flangia della boax, uscita della sfera) alla fine dello stacco. Se valorizzata,
+        /// <see cref="LengthMm"/> è solo provvisoria: la fine dello stacco viene fissata in Revit
+        /// quando l'ingombro reale della valvola è noto. Zero = lo stacco si ferma alla flangia,
+        /// nessun tubo a valle (stacco cieco).
+        /// </summary>
+        public double? LengthAfterValveMm { get; set; }
+
+        /// <summary>
         /// False = niente raccordo: il tratto principale non viene spezzato e lo stacco parte
         /// dall'asse del tubo, semplicemente sovrapposto (usato dal collettore, dove il T
         /// instraderebbe la derivazione con un raccordo della misura dello stacco).

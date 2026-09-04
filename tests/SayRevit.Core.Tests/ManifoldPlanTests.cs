@@ -396,7 +396,8 @@ namespace SayRevit.Core.Tests
         {
             var p = Plan(20, 16, 16);
             var text = p.CircuitsToString();
-            Assert.Equal("20;16;16", text);
+            // ogni circuito porta la sua tipologia (diretto se non scelta)
+            Assert.Equal("20:direct;16:direct;16:direct", text);
 
             var back = new ManifoldPlan();
             back.LoadCircuitsFromString(text);

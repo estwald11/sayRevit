@@ -20,6 +20,7 @@ namespace SayRevit.Addin
                 SpacingMm = settings.ManifoldSpacingMm,
                 AutoSpacing = settings.ManifoldAutoSpacing,
                 CircuitLengthMm = settings.ManifoldCircuitLengthMm,
+                NoPumpPipeAfterValveMm = settings.ManifoldNoPumpPipeAfterValveMm,
                 HeaderDirection = DirectionKind.PlusX,
                 CircuitDirection = direction,
                 PipeTypeName = string.IsNullOrWhiteSpace(settings.ManifoldPipeTypeName) ? null : settings.ManifoldPipeTypeName,
