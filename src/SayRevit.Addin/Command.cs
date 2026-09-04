@@ -49,24 +49,28 @@ namespace SayRevit.Addin
             if (ok != true || window.Result == null || !window.Result.Success) return Result.Cancelled;
 
             // Livello: quello della vista attiva (o il primo del progetto); quota: DefaultElevationMm
-            // delle impostazioni sopra il livello. Il punto di partenza si sceglie sempre nel modello.
+            // delle impostazioni sopra il livello. Punto di partenza: origine del progetto, oppure
+            // scelto nel modello se così indicato in "Mostra di più".
             var options = new BuildOptions
             {
                 DefaultElevationMm = settings.DefaultElevationMm,
                 PipeTypeName = window.SelectedPipeType
             };
 
-            try
+            if (settings.StartMode == "pick")
             {
-                options.StartPoint = uidoc.Selection.PickPoint(ObjectSnapTypes.None, "Scegli il punto di partenza del collettore/tubazione (Esc annulla)");
-            }
-            catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-            {
-                return Result.Cancelled;
-            }
-            catch (Exception ex)
-            {
-                TaskDialog.Show("sayRevit", "Impossibile scegliere un punto in questa vista (" + ex.Message + "). Uso l'origine del progetto.");
+                try
+                {
+                    options.StartPoint = uidoc.Selection.PickPoint(ObjectSnapTypes.None, "Scegli il punto di partenza del collettore/tubazione (Esc annulla)");
+                }
+                catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+                {
+                    return Result.Cancelled;
+                }
+                catch (Exception ex)
+                {
+                    TaskDialog.Show("sayRevit", "Impossibile scegliere un punto in questa vista (" + ex.Message + "). Uso l'origine del progetto.");
+                }
             }
 
             var plan = window.Result.Plan;

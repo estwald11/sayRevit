@@ -68,28 +68,52 @@ namespace SayRevit.Addin.UI
         private readonly TextBox _valveDistance = new TextBox();
         private readonly ComboBox _butterflyRoll = new ComboBox();
         private readonly ComboBox _ballRoll = new ComboBox();
+        private readonly ComboBox _startMode = new ComboBox();
 
         private bool _suspendChanged;
 
         /// <summary>Sollevato a ogni modifica dei campi: la finestra ne approfitta per aggiornare l'anteprima.</summary>
         public event EventHandler Changed;
 
+        /// <summary>
+        /// Il pannello mostra solo l'essenziale: circuiti (DN) e materiale. Tutto il resto
+        /// (collettore, interasse, ritorno, punto iniziale, valvole) sta qui, e la finestra lo
+        /// mette in una sezione "Mostra di più" chiusa per impostazione predefinita.
+        /// </summary>
+        public UIElement MoreSection { get; }
+
         public ManifoldPanel(ModelCatalog catalog)
         {
             _catalog = catalog ?? ModelCatalog.Empty();
 
-            Margin = new Thickness(0, 0, 0, 8);
-            RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Margin = new Thickness(0, 0, 0, 4);
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
-            PlaceRow(BuildMaterialRow(), 0);
-            PlaceRow(BuildCircuitHeader(), 1);
-            PlaceRow(BuildCircuitList(), 2);
-            PlaceRow(BuildParameters(), 3);
-            PlaceRow(BuildValves(), 4);
+            PlaceRow(BuildCircuitHeader(), 0);
+            PlaceRow(BuildCircuitList(), 1);
+            PlaceRow(BuildMaterialRow(), 2);
+
+            var more = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            more.Children.Add(BuildParameters());
+            more.Children.Add(BuildStartPoint());
+            more.Children.Add(BuildValves());
+            MoreSection = more;
+        }
+
+        /// <summary>Punto di partenza: "origin" (origine del progetto, predefinito) o "pick" (scelto nel modello dopo Crea).</summary>
+        public string StartMode => _startMode.SelectedIndex == 1 ? "pick" : "origin";
+
+        private UIElement BuildStartPoint()
+        {
+            var panel = new WrapPanel();
+            _startMode.Items.Add("Origine del progetto");
+            _startMode.Items.Add("Scegli nel modello (dopo Crea)");
+            _startMode.SelectedIndex = 0;
+            _startMode.ToolTip = "Dove parte la base del collettore. Con \"Scegli nel modello\" la finestra si chiude e Revit chiede un punto (Esc annulla).";
+            panel.Children.Add(Labeled("Punto iniziale:", _startMode, 220));
+            return panel;
         }
 
         private void PlaceRow(UIElement element, int row)
@@ -354,7 +378,7 @@ namespace SayRevit.Addin.UI
                                      "Se la leva esce dal verso sbagliato, cambia qui senza ricompilare.";
 
             foreach (var a in RollAngles) _ballRoll.Items.Add(a + "°");
-            _ballRoll.SelectedItem = "0°";
+            _ballRoll.SelectedItem = "90°";
             panel.Children.Add(Labeled("Rotazione sfera:", _ballRoll, 70));
             _ballRoll.ToolTip = "Rotazione della valvola a sfera attorno all'asse del tubo, stessa convenzione della boax.";
 
@@ -615,7 +639,7 @@ namespace SayRevit.Addin.UI
                 ValvePnBar = SelectedPn(),
                 ValveDistanceMm = ParseNumber(_valveDistance.Text, 150),
                 ButterflyRollDegrees = ParseNumber((_butterflyRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90),
-                BallRollDegrees = ParseNumber((_ballRoll.SelectedItem as string ?? "0").TrimEnd('°'), 0)
+                BallRollDegrees = ParseNumber((_ballRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90)
             };
             plan.BallValveTypes.AddRange(FamilyTypes(_ballFamily));
             plan.ButterflyValveTypes.AddRange(FamilyTypes(_butterflyFamily));
@@ -658,6 +682,7 @@ namespace SayRevit.Addin.UI
                 var storedType = _pipeType.Items.IndexOf(settings.ManifoldPipeTypeName);
                 if (storedType >= 0) _pipeType.SelectedIndex = storedType;
                 UpdatePipeTypeTooltip();
+                _startMode.SelectedIndex = settings.StartMode == "pick" ? 1 : 0;
 
                 if (_withValves.IsEnabled) _withValves.IsChecked = settings.ManifoldWithValves;
                 _ballMaxDn.Text = settings.ManifoldBallValveMaxDnMm.ToString("0.##", CultureInfo.InvariantCulture);
@@ -715,6 +740,7 @@ namespace SayRevit.Addin.UI
             settings.ManifoldValveDistanceMm = plan.ValveDistanceMm;
             settings.ManifoldButterflyRollDeg = plan.ButterflyRollDegrees;
             settings.ManifoldBallRollDeg = plan.BallRollDegrees;
+            settings.StartMode = StartMode;
         }
 
         /// <summary>Sceglie la famiglia salvata, se è caricata anche in questo progetto.</summary>

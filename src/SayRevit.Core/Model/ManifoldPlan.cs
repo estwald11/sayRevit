@@ -176,7 +176,7 @@ namespace SayRevit.Core.Model
         public double ButterflyRollDegrees { get; set; } = 90;
 
         /// <summary>Rotazione della valvola a sfera attorno all'asse del tubo (gradi), stessa convenzione della boax.</summary>
-        public double BallRollDegrees { get; set; }
+        public double BallRollDegrees { get; set; } = 90;
 
         /// <summary>
         /// Valvola prevista per un circuito di questo DN: sotto la soglia la sfera, sopra la boax.

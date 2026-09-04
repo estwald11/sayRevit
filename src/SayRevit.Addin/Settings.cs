@@ -12,6 +12,8 @@ namespace SayRevit.Addin
         public string ClaudeModel { get; set; } = "claude-opus-5";
         /// <summary>Quota del collettore/tubazione sopra il livello (mm), quando il testo non la indica.</summary>
         public double DefaultElevationMm { get; set; } = 2500;
+        /// <summary>Punto di partenza: "origin" (origine del progetto, predefinito) o "pick" (scelto nel modello dopo Crea).</summary>
+        public string StartMode { get; set; } = "origin";
         public string LastText { get; set; } = string.Empty;
         /// <summary>Nome del tipo di tubazione scelto nella finestra; vuoto = automatico.</summary>
         public string PipeTypeName { get; set; } = string.Empty;
@@ -47,7 +49,7 @@ namespace SayRevit.Addin
         /// <summary>Rotazione della boax attorno all'asse del tubo (gradi).</summary>
         public double ManifoldButterflyRollDeg { get; set; } = 90;
         /// <summary>Rotazione della valvola a sfera attorno all'asse del tubo (gradi).</summary>
-        public double ManifoldBallRollDeg { get; set; }
+        public double ManifoldBallRollDeg { get; set; } = 90;
 
         public static string FilePath
         {
@@ -87,6 +89,7 @@ namespace SayRevit.Addin
                 case "ParserMode": s.ParserMode = v; break;
                 case "ClaudeModel": s.ClaudeModel = v; break;
                 case "DefaultElevationMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d)) s.DefaultElevationMm = d; break;
+                case "StartMode": s.StartMode = v == "pick" ? "pick" : "origin"; break;
                 case "LastText": s.LastText = v.Replace("\\n", "\n"); break;
                 case "PipeTypeName": s.PipeTypeName = v; break;
                 case "ManifoldMode": s.ManifoldMode = v == "true"; break;
@@ -121,6 +124,7 @@ namespace SayRevit.Addin
                     "ParserMode=" + ParserMode,
                     "ClaudeModel=" + ClaudeModel,
                     "DefaultElevationMm=" + DefaultElevationMm.ToString(CultureInfo.InvariantCulture),
+                    "StartMode=" + StartMode,
                     "LastText=" + (LastText ?? string.Empty).Replace("\r", string.Empty).Replace("\n", "\\n"),
                     "PipeTypeName=" + (PipeTypeName ?? string.Empty),
                     "ManifoldMode=" + (ManifoldMode ? "true" : "false"),

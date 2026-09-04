@@ -28,7 +28,10 @@ namespace SayRevit.Addin.UI
         private readonly ComboBox _pipeType = new ComboBox();
         private readonly TextBox _claudeModel = new TextBox();
         private readonly TextBox _preview = new TextBox();
+        private readonly Expander _more = new Expander();
         private readonly TextBlock _status = new TextBlock();
+        private const double CompactHeight = 430;
+        private const double FullHeight = 760;
         private readonly Button _interpret = new Button();
         private readonly Button _create = new Button();
 
@@ -61,9 +64,9 @@ namespace SayRevit.Addin.UI
 
             Title = "sayRevit – tubazioni e canali da testo";
             Width = 760;
-            Height = 720;
+            Height = FullHeight;
             MinWidth = 600;
-            MinHeight = 520;
+            MinHeight = 360;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
             FontSize = 13;
@@ -202,11 +205,35 @@ namespace SayRevit.Addin.UI
             _create.Margin = new Thickness(0, 0, 8, 0);
             _create.IsEnabled = false;
             _create.FontWeight = FontWeights.SemiBold;
-            _create.ToolTip = "Chiude la finestra e chiede il punto di partenza nel modello (Esc annulla).";
+            _create.ToolTip = "Crea gli elementi in Revit a partire dall'origine del progetto\n" +
+                              "(oppure da un punto scelto nel modello: vedi \"Punto iniziale\" in \"Mostra di più\").";
             _create.Click += (s, e) => Confirm();
             buttons.Children.Add(_create);
             Grid.SetRow(buttons, 3);
             root.Children.Add(buttons);
+
+            // In modalità Collettore tutto ciò che segue i DN e il materiale (parametri, punto
+            // iniziale, valvole e la stessa anteprima) sta in "Mostra di più", chiuso all'apertura.
+            var bottom = new Grid();
+            bottom.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            bottom.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(bottom, 4);
+            root.Children.Add(bottom);
+
+            _more.Header = "Mostra di più";
+            _more.IsExpanded = false;
+            _more.Margin = new Thickness(0, 0, 0, 6);
+            // la sezione è lunga: scorre da sola, così l'anteprima e la riga di stato restano visibili
+            _more.Content = new ScrollViewer
+            {
+                Content = _manifoldPanel.MoreSection,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 340
+            };
+            _more.Expanded += (s, e) => ApplyMoreState();
+            _more.Collapsed += (s, e) => ApplyMoreState();
+            Grid.SetRow(_more, 0);
+            bottom.Children.Add(_more);
 
             _preview.IsReadOnly = true;
             _preview.TextWrapping = TextWrapping.Wrap;
@@ -215,8 +242,8 @@ namespace SayRevit.Addin.UI
             _preview.Padding = new Thickness(6);
             _preview.Background = new SolidColorBrush(Color.FromRgb(0xF7, 0xF7, 0xF7));
             _preview.Text = "L'anteprima di ciò che verrà creato comparirà qui.";
-            Grid.SetRow(_preview, 4);
-            root.Children.Add(_preview);
+            Grid.SetRow(_preview, 1);
+            bottom.Children.Add(_preview);
 
             _status.Margin = new Thickness(0, 6, 0, 0);
             _status.TextWrapping = TextWrapping.Wrap;
@@ -241,6 +268,9 @@ namespace SayRevit.Addin.UI
                 ? "Collettore parametrico: aggiungi i circuiti e indica il DN di ciascuno."
                 : "Descrivi cosa creare (solo tubazioni e canali):";
             Title = manifold ? "sayRevit – collettore parametrico" : "sayRevit – tubazioni e canali da testo";
+            _create.Content = manifold ? "Crea collettore" : "Crea in Revit";
+            _more.Visibility = manifold ? Visibility.Visible : Visibility.Collapsed;
+            ApplyMoreState();
 
             if (manifold)
             {
@@ -254,6 +284,26 @@ namespace SayRevit.Addin.UI
                 _preview.Text = "L'anteprima di ciò che verrà creato comparirà qui.";
                 SetStatus(string.Empty, false);
             }
+        }
+
+        /// <summary>
+        /// "Mostra di più" chiuso: restano DN, materiale e il pulsante, e la finestra si stringe;
+        /// aperto: parametri, punto iniziale, valvole e anteprima, con la finestra alta.
+        /// In modalità testuale l'anteprima è sempre visibile.
+        /// </summary>
+        private void ApplyMoreState()
+        {
+            var manifold = ManifoldMode;
+            var open = !manifold || _more.IsExpanded;
+            _more.Header = _more.IsExpanded ? "Mostra di meno" : "Mostra di più";
+            _preview.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+            if (!IsLoaded || WindowState != WindowState.Normal)
+            {
+                Height = open ? FullHeight : CompactHeight;
+                return;
+            }
+            if (open && Height < FullHeight) Height = FullHeight;
+            if (!open) Height = CompactHeight;
         }
 
         private void UpdatePipeTypeTooltip()
@@ -289,7 +339,12 @@ namespace SayRevit.Addin.UI
             {
                 _preview.Text = plan.Summary() + Environment.NewLine + PlanFormatter.Describe(result);
                 _create.IsEnabled = true;
-                SetStatus("Anteprima pronta. Controlla e premi \"Crea in Revit\".", false);
+                // con l'anteprima nascosta gli avvisi vanno almeno contati qui
+                var warnings = result.Warnings.Count;
+                SetStatus(warnings == 0
+                        ? "Pronto: premi \"Crea collettore\"."
+                        : "Pronto, con " + warnings + (warnings == 1 ? " avviso" : " avvisi") + ": vedi \"Mostra di più\" prima di creare.",
+                    false);
             }
             else
             {

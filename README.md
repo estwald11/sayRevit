@@ -10,11 +10,13 @@ system types and levels already loaded in the project. Two modes:
 - **Manifold mode (Collettore)** — fully parametric supply/return manifold builder.
   No natural language: every value comes from explicit fields.
 
-Both modes show a preview with notes and warnings before anything is created. **Create in
-Revit** closes the window and asks for the start point in the model (Esc cancels); the level is
-the active view's one and the elevation above it is the `DefaultElevationMm` setting (2500 mm).
-Creation runs in a single transaction (one Undo step), and created elements are selected at
-the end.
+Both modes show a preview with notes and warnings before anything is created. In manifold
+mode the window shows only the circuit DNs, the material and the **Crea collettore** button;
+everything else (header DN, spacing, return, start point, valves and the preview itself) sits
+in a collapsed **Mostra di più** section. The manifold starts at the project origin unless
+"Punto iniziale" is set to pick a point in the model (Esc cancels); the level is the active
+view's one and the elevation above it is the `DefaultElevationMm` setting (2500 mm). Creation
+runs in a single transaction (one Undo step), and created elements are selected at the end.
 
 ## Manifold mode
 
@@ -40,7 +42,7 @@ the end.
   project), the preferred PN and the distance of the valve centre from the **outer edge** of the
   header (default 150 mm; the outer diameter comes from the pipe type's segment sizes, so the
   value is independent of the header DN the formula picks). Each family has its own rotation
-  about the pipe axis (ball valve default 0°, boax 90°). The type is chosen from
+  about the pipe axis (default 90° for both the ball valve and the boax). The type is chosen from
   the family's type names, which may be metric (`DN40_PN16_48013980`) or imperial
   (`1 1/2" Lever`); the exact type per DN is shown in the preview before anything is created.
   Valves are placed on a work plane that contains the stub axis (what Revit does when you

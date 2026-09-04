@@ -89,20 +89,20 @@ namespace SayRevit.Core.Tests
         }
 
         [Fact]
-        public void RollioPredefinito_ZeroPerLaSfera_90PerLaBoax()
+        public void RollioPredefinito_90PerSferaEBoax()
         {
             var valves = Valves(Plan(25, 40));
-            Assert.Equal(0, valves[0].RollDegrees);
+            Assert.Equal(90, valves[0].RollDegrees);
             Assert.Equal(90, valves[1].RollDegrees);
         }
 
         [Fact]
-        public void RollioScelto_ValeSoloPerLaBoax()
+        public void RollioBoax_NonToccaLaSfera()
         {
             var plan = Plan(25, 40);
             plan.ButterflyRollDegrees = 270;
             var valves = Valves(plan);
-            Assert.Equal(0, valves[0].RollDegrees);
+            Assert.Equal(90, valves[0].RollDegrees);
             Assert.Equal(270, valves[1].RollDegrees);
         }
 
@@ -214,15 +214,15 @@ namespace SayRevit.Core.Tests
         public void RotazioneSfera_ScegliibileDallUtente_NonToccaLaBoax()
         {
             var plan = Plan(25, 40);
-            plan.BallRollDegrees = 90;
+            plan.BallRollDegrees = 180;
             var valves = Valves(plan);
-            Assert.Equal(90, valves[0].RollDegrees);
+            Assert.Equal(180, valves[0].RollDegrees);
             Assert.Equal(90, valves[1].RollDegrees);
             plan.ButterflyRollDegrees = 0;
             valves = Valves(plan);
-            Assert.Equal(90, valves[0].RollDegrees);
+            Assert.Equal(180, valves[0].RollDegrees);
             Assert.Equal(0, valves[1].RollDegrees);
-            Assert.Contains(plan.ToParseResult().Notes, n => n.Contains("sfera girate di 90"));
+            Assert.Contains(plan.ToParseResult().Notes, n => n.Contains("sfera girate di 180"));
         }
     }
 }
