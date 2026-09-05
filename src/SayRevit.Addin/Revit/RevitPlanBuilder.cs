@@ -92,8 +92,7 @@ namespace SayRevit.Addin.Revit
             }
 
             PrepareValveFamilies(plan.Runs.SelectMany(r => r.Branches)
-                .Select(b => b.Valve)
-                .Where(v => v != null)
+                .SelectMany(PiecesOf)
                 .Select(v => v.FamilyName));
 
             using (var t = new Transaction(_doc, "sayRevit: crea MEP da testo"))
@@ -114,6 +113,10 @@ namespace SayRevit.Addin.Revit
                         if (previous != null && plan.Runs[i].ContinuesPrevious) Connect(previous, ctx);
                         previous = ctx;
                     }
+                    // catene rimaste ferme davanti a un pezzo da allineare senza gemello: si completano
+                    FinishPausedChains();
+                    // i bypass uniscono stacchi di tratti diversi: si chiudono quando ci sono tutti
+                    CompleteBypasses();
 
                     if (_report.CreatedIds.Count == 0)
                     {
@@ -138,6 +141,18 @@ namespace SayRevit.Addin.Revit
             if (_report.Succeeded) CheckAfterCommit();
             FlushDiag();
             return _report;
+        }
+
+        /// <summary>Tutti i pezzi in linea previsti su uno stacco: valvola, catena, pezzo del bypass.</summary>
+        private static IEnumerable<MepValve> PiecesOf(MepBranch b)
+        {
+            if (b == null) yield break;
+            if (b.Valve != null) yield return b.Valve;
+            foreach (var item in b.Chain)
+            {
+                if (item.Kind == StubItemKind.Piece && item.Piece != null) yield return item.Piece;
+            }
+            if (b.Bypass != null && b.Bypass.InlinePiece != null) yield return b.Bypass.InlinePiece;
         }
 
         // ------------------------------------------------------------------ run
@@ -371,9 +386,27 @@ namespace SayRevit.Addin.Revit
             if (cm == null) return null;
             foreach (Connector c in cm.Connectors)
             {
-                if (c.ConnectorType == ConnectorType.End) return c;
+                if (IsPipeEnd(c)) return c;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Connettore di estremità di tubo o canale: le famiglie di regolazione (energy valve)
+        /// portano anche connettori elettrici, che non c'entrano con il montaggio in linea.
+        /// </summary>
+        private static bool IsPipeEnd(Connector c)
+        {
+            try
+            {
+                if (c.ConnectorType != ConnectorType.End) return false;
+                var d = c.Domain;
+                return d == Domain.DomainPiping || d == Domain.DomainHvac;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>
@@ -548,7 +581,146 @@ namespace SayRevit.Addin.Revit
         /// interferire, e portati in posizione solo dopo che si è verificato che ci stiano: se
         /// qualcosa non va, lo stacco resta intero e non si crea geometria a metà.
         /// </summary>
+        /// <summary>Valvola (o altro pezzo in linea) con le sue eventuali flange, montate al banco e poi portate in posizione insieme.</summary>
+        private sealed class Assembly
+        {
+            public FamilyInstance Body;
+            public FamilyInstance First;
+            public FamilyInstance Second;
+            /// <summary>Metà luce del corpo (piedi).</summary>
+            public double Half;
+            /// <summary>Spessore di una flangia (piedi); 0 senza flange.</summary>
+            public double FlangeLength;
+
+            /// <summary>Dal centro del corpo alla faccia esterna dell'insieme (piedi).</summary>
+            public double Reach
+            {
+                get { return Half + FlangeLength; }
+            }
+
+            public double ReachMm
+            {
+                get { return Units.FtToMm(Reach); }
+            }
+
+            /// <summary>Pezzo dal lato del collettore / dal lato dell'utenza.</summary>
+            public FamilyInstance Near
+            {
+                get { return First ?? Body; }
+            }
+
+            public FamilyInstance Far
+            {
+                get { return Second ?? Body; }
+            }
+
+            public List<FamilyInstance> Pieces
+            {
+                get
+                {
+                    var list = new List<FamilyInstance> { Body };
+                    if (First != null) list.Add(First);
+                    if (Second != null) list.Add(Second);
+                    return list;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Monta al banco il corpo e — se il pezzo le vuole e il materiale ne ha una — le due
+        /// flange, tutte allineate a <paramref name="dir"/> con il rollio del pezzo, le flange col
+        /// disco verso il corpo. Null se il corpo non si monta (già segnalato).
+        /// </summary>
+        private Assembly MountAssembly(FamilySymbol symbol, RunContext ctx, MepValve valve, XYZ bench, XYZ dir, double pipeRadius, string what)
+        {
+            var roll = valve.RollDegrees * Math.PI / 180.0;
+            var body = PlaceInline(symbol, ctx, bench, dir, roll, 0, what);
+            if (body == null) return null;
+            if (valve.Reversed)
+            {
+                // verso invertito: 180° attorno alla normale del piano di lavoro (resta nel piano),
+                // entrata e uscita si scambiano; il rollio è già quello voluto
+                if (!TryRotate(body, Line.CreateUnbound(Midpoint(body), PlaneUp(dir, roll)), Math.PI))
+                    WarnOnce(what + "verso non invertibile: il pezzo resta col verso della famiglia.");
+                else
+                    Diag("  verso invertito (180° attorno alla normale al tubo).");
+            }
+            var asm = new Assembly { Body = body, Half = BodyLength(body, dir) / 2.0 };
+
+            // Flange prima e dopo: solo se il pezzo le vuole e solo se il materiale del tipo ne ha una definita.
+            if (valve.WithFlanges)
+            {
+                var flangeSymbol = ResolveFlangeSymbol(ctx, valve, what);
+                if (flangeSymbol != null)
+                {
+                    // flange della misura del corpo (se il corpo è più piccolo del tubo, la riduzione
+                    // va fuori dalle flange); senza attacchi leggibili, della misura del tubo
+                    var bodyRadius = EndConnectors(body).Select(SafeRadius).FirstOrDefault(r => r > 0);
+                    var flangeRadius = bodyRadius > 0 ? bodyRadius : pipeRadius;
+                    // stesso rollio della valvola: le forature restano allineate
+                    var first = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(1000), dir, roll, flangeRadius, what);
+                    var second = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(2000), dir, roll, flangeRadius, what);
+                    if (first == null || second == null)
+                    {
+                        WarnOnce(what + "flange non montate: la valvola viene inserita senza.");
+                        DeleteAll(new[] { first, second });
+                    }
+                    else
+                    {
+                        asm.First = first;
+                        asm.Second = second;
+                        asm.FlangeLength = BodyLength(first, dir);
+                        // il disco della flangia guarda la valvola, il collare guarda il tubo:
+                        // sotto la valvola il disco sta in alto, sopra la valvola sta in basso
+                        OrientFlange(first, dir, PlaneUp(dir, roll), true, what);
+                        OrientFlange(second, dir, PlaneUp(dir, roll), false, what);
+                    }
+                }
+            }
+            return asm;
+        }
+
+        /// <summary>Porta l'insieme in posizione, corpo centrato in <paramref name="center"/>, sempre lungo l'asse.</summary>
+        private bool PositionAssembly(Assembly asm, XYZ center, XYZ dir, string what)
+        {
+            var moved = CenterAt(asm.Body, center, what);
+            if (asm.First != null)
+            {
+                moved &= CenterAt(asm.First, center - dir * (asm.Half + asm.FlangeLength / 2.0), what);
+                moved &= CenterAt(asm.Second, center + dir * (asm.Half + asm.FlangeLength / 2.0), what);
+            }
+            return moved;
+        }
+
+        /// <summary>Collega flangia–corpo–flangia tra loro.</summary>
+        private void JoinAssembly(Assembly asm, XYZ center, XYZ dir, string what)
+        {
+            if (asm.First != null) Join(asm.First, asm.Body, center - dir * asm.Half, what);
+            if (asm.Second != null) Join(asm.Body, asm.Second, center + dir * asm.Half, what);
+        }
+
+        private void RegisterAssembly(Assembly asm)
+        {
+            _report.CreatedIds.Add(asm.Body.Id);
+            _report.Valves++;
+            if (asm.First != null && asm.Second != null)
+            {
+                _report.CreatedIds.Add(asm.First.Id);
+                _report.CreatedIds.Add(asm.Second.Id);
+                _report.Fittings += 2;
+            }
+        }
+
         private void PlaceValve(RunContext ctx, MEPCurve stub, XYZ stubStart, XYZ dir, MepBranch branch, MepSize size, string label)
+        {
+            PlaceValve(ctx, stub, stubStart, dir, branch, size, label, 0);
+        }
+
+        /// <param name="endMarginMm">
+        /// Spazio da lasciare libero alle due estremità del tubo (mm), oltre al pezzo: serve sul
+        /// bypass, dove ai due capi del tratto vanno i gomiti.
+        /// </param>
+        private void PlaceValve(RunContext ctx, MEPCurve stub, XYZ stubStart, XYZ dir, MepBranch branch, MepSize size, string label, double endMarginMm)
         {
             var valve = branch == null ? null : branch.Valve;
             if (valve == null || stub == null) return;
@@ -577,61 +749,33 @@ namespace SayRevit.Addin.Revit
             var stubEnd = originalEnd;
             var afterMm = branch.LengthAfterValveMm;
             var pipeRadius = PipeRadius(stub);
-            var roll = valve.RollDegrees * Math.PI / 180.0;
             // Banco di montaggio sull'asse dello stacco ma oltre la sua fine: il tragitto fino alla
             // posizione finale resta sull'asse, quindi dentro il piano di lavoro del pezzo.
             var farthestMm = Math.Max(branch.LengthMm, valve.DistanceMm + (afterMm ?? 0) + 1000);
             var bench = center + dir * Units.MmToFt(farthestMm + 3000);
 
-            var placed = new List<FamilyInstance>();
-            var body = PlaceInline(symbol, ctx, bench, dir, roll, 0, what);
-            if (body == null) return;
-            placed.Add(body);
+            var asm = MountAssembly(symbol, ctx, valve, bench, dir, pipeRadius, what);
+            if (asm == null) return;
+            var placed = asm.Pieces;
+            var body = asm.Body;
+            var first = asm.First;
+            var second = asm.Second;
+            var half = asm.Half;
+            var flangeLength = asm.FlangeLength;
 
-            var half = BodyLength(body, dir) / 2.0;
-
-            // Flange prima e dopo: solo per la boax e solo se il materiale del tipo ne ha una definita.
-            double flangeLength = 0;
-            FamilyInstance first = null, second = null;
-            if (valve.WithFlanges)
-            {
-                var flangeSymbol = ResolveFlangeSymbol(ctx, valve, what);
-                if (flangeSymbol != null)
-                {
-                    // stesso rollio della valvola: le forature restano allineate
-                    first = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
-                    second = PlaceInline(flangeSymbol, ctx, bench + dir * Units.MmToFt(2000), dir, roll, pipeRadius, what);
-                    if (first == null || second == null)
-                    {
-                        WarnOnce(what + "flange non montate: la valvola viene inserita senza.");
-                        DeleteAll(new[] { first, second });
-                        first = second = null;
-                    }
-                    else
-                    {
-                        placed.Add(first);
-                        placed.Add(second);
-                        flangeLength = BodyLength(first, dir);
-                        // il disco della flangia guarda la valvola, il collare guarda il tubo:
-                        // sotto la valvola il disco sta in alto, sopra la valvola sta in basso
-                        OrientFlange(first, dir, PlaneUp(dir, roll), true, what);
-                        OrientFlange(second, dir, PlaneUp(dir, roll), false, what);
-                    }
-                }
-            }
-
-            var reach = half + flangeLength;
-            var reachMm = Units.FtToMm(reach);
+            var reach = asm.Reach;
+            var reachMm = asm.ReachMm;
             // Con pezzi a spessore quasi nullo (valvole wafer, flange sottili) non c'è niente da
             // togliere: restano infilati sul tubo, che non viene tagliato.
             var cut = reachMm > 1;
             // con il tubo dopo la valvola fissato, la fine dello stacco si adatta: conta solo che
             // il pezzo non arrivi al collettore
-            var tooFar = !afterMm.HasValue && valve.DistanceMm + reachMm > branch.LengthMm - 1;
-            if (cut && (valve.DistanceMm - reachMm < 1 || tooFar))
+            var tooFar = !afterMm.HasValue && valve.DistanceMm + reachMm > branch.LengthMm - 1 - endMarginMm;
+            if (cut && (valve.DistanceMm - reachMm < 1 + endMarginMm || tooFar))
             {
                 WarnOnce(what + "l'ingombro (" + PlanFormatter.Len(2 * reachMm) + ") non entra nello stacco a " +
-                         PlanFormatter.Len(valve.DistanceMm) + " dall'asse: valvola non inserita.");
+                         PlanFormatter.Len(valve.DistanceMm) + " dall'asse" +
+                         (endMarginMm > 0 ? " lasciando " + PlanFormatter.Len(endMarginMm) + " ai capi" : "") + ": valvola non inserita.");
                 DeleteAll(placed);
                 return;
             }
@@ -674,12 +818,7 @@ namespace SayRevit.Addin.Revit
                                      PlanFormatter.Len(Units.FtToMm((stubEnd - stubStart).DotProduct(dir))) + ")" : "") + ".");
 
             // dal banco alla posizione definitiva, sempre lungo l'asse dello stacco
-            var moved = CenterAt(body, center, what);
-            if (first != null)
-            {
-                moved &= CenterAt(first, center - dir * (half + flangeLength / 2.0), what);
-                moved &= CenterAt(second, center + dir * (half + flangeLength / 2.0), what);
-            }
+            var moved = PositionAssembly(asm, center, dir, what);
             if (!moved)
             {
                 WarnOnce(what + "pezzi non portati in posizione: annullo l'inserimento.");
@@ -692,20 +831,12 @@ namespace SayRevit.Addin.Revit
             // catena: tubo – flangia – valvola – flangia – tubo
             if (cut)
             {
-                Join(stub, first ?? body, nearFace, what);
-                if (first != null) Join(first, body, center - dir * half, what);
-                if (second != null) Join(body, second, center + dir * half, what);
-                if (after != null) Join(second ?? body, after, farFace, what);
+                Join(stub, asm.Near, nearFace, what);
+                JoinAssembly(asm, center, dir, what);
+                if (after != null) Join(asm.Far, after, farFace, what);
             }
 
-            _report.CreatedIds.Add(body.Id);
-            _report.Valves++;
-            if (first != null && second != null)
-            {
-                _report.CreatedIds.Add(first.Id);
-                _report.CreatedIds.Add(second.Id);
-                _report.Fittings += 2;
-            }
+            RegisterAssembly(asm);
 
             var ends = CountConnectedEnds(body);
             Diag("  esito: corpo a " + VecMm(Midpoint(body) - center) + " mm dal centro, estremità collegate " + ends + "/2" +
@@ -714,6 +845,700 @@ namespace SayRevit.Addin.Revit
             if (cut && ends < 2)
                 WarnOnce(what + "inserita ma collegata su " + ends + " estremità su 2: controlla la misura del tipo \"" +
                          symbol.Name + "\" rispetto al tubo.");
+        }
+
+        // ------------------------------------------------ catena di pezzi sullo stacco
+
+        /// <summary>Metà bypass costruita su uno stacco: il T, il tubo orizzontale che ne parte e dove finisce.</summary>
+        private sealed class BypassHalf
+        {
+            public string Key;
+            public RunContext Ctx;
+            public string Label;
+            /// <summary>Punto del T sull'asse dello stacco.</summary>
+            public XYZ Point;
+            /// <summary>Fine del tubo orizzontale (a metà strada tra i due stacchi, in pianta).</summary>
+            public XYZ End;
+            public MEPCurve BranchPipe;
+            /// <summary>Direzione dello stacco (il tratto di raccordo del bypass corre lungo questa).</summary>
+            public XYZ Dir;
+            public MepSize Size;
+            public MepValve InlinePiece;
+        }
+
+        private readonly Dictionary<string, List<BypassHalf>> _bypassHalves = new Dictionary<string, List<BypassHalf>>();
+
+        /// <summary>
+        /// Monta sullo stacco la catena completa dei pezzi (mix 2 vie): dall'asse del collettore,
+        /// il primo pezzo centrato alla sua distanza, poi ogni pezzo a partire dalla faccia
+        /// d'uscita del precedente più il tubo libero indicato; i T del bypass spezzano lo stacco e
+        /// fanno partire il tubo orizzontale verso lo stacco gemello. Ogni pezzo è montato al banco,
+        /// misurato e portato in posizione come la valvola singola; il tubo provvisorio dello
+        /// stacco viene via via accorciato alla faccia del pezzo successivo, e alla fine portato
+        /// alla lunghezza del tubo dopo l'ultimo pezzo. Un pezzo che non si monta viene saltato
+        /// (con avviso) e la catena prosegue.
+        /// </summary>
+        private void BuildChain(RunContext ctx, MEPCurve stub, XYZ stubStart, XYZ dir, MepBranch branch, MepSize size, string label)
+        {
+            if (branch == null || stub == null || branch.Chain.Count == 0) return;
+            var chainWhat = label + "catena: ";
+            if (ctx.Run.Kind != MepKind.Pipe)
+            {
+                WarnOnce(chainWhat + "la catena di pezzi si monta solo sulle tubazioni.");
+                return;
+            }
+            dir = dir.Normalize();
+            var s = new ChainState
+            {
+                Ctx = ctx,
+                StubStart = stubStart,
+                Dir = dir,
+                Branch = branch,
+                Size = size,
+                Label = label,
+                ChainWhat = chainWhat,
+                PipeRadius = PipeRadius(stub),
+                ProvisionalEnd = stubStart + dir * Units.MmToFt(branch.LengthMm),
+                // banco unico oltre la fine provvisoria: ogni pezzo viene subito portato in posizione
+                Bench = stubStart + dir * Units.MmToFt(branch.LengthMm + 6000),
+                Pending = stub,
+                PendingStart = stubStart
+            };
+            RunChain(s);
+        }
+
+        /// <summary>
+        /// Stato di una catena in costruzione: serve a fermarla davanti a un pezzo da allineare con lo
+        /// stacco gemello (<see cref="StubItem.AlignKey"/>) e a riprenderla quando si conosce la quota
+        /// dell'altro. Le catene ferme a fine costruzione vengono completate alla loro quota naturale.
+        /// </summary>
+        private sealed class ChainState
+        {
+            public RunContext Ctx;
+            public XYZ StubStart;
+            public XYZ Dir;
+            public MepBranch Branch;
+            public MepSize Size;
+            public string Label;
+            public string ChainWhat;
+            public double PipeRadius;
+            public XYZ ProvisionalEnd;
+            public XYZ Bench;
+            public MEPCurve Pending;          // tubo già esistente, da accorciare alla prossima faccia
+            public XYZ PendingStart;          // dove comincia (o comincerà) il tubo verso il prossimo pezzo
+            public FamilyInstance PrevPiece;  // ultimo pezzo montato, per la giunzione diretta o col tubo
+            public MEPCurve PrevAdapter;      // tratto corto della misura del pezzo dopo l'ultimo pezzo: il prossimo tubo ci si collega con una riduzione
+            public double CursorMm;           // faccia d'uscita dell'ultimo elemento, dall'asse del collettore
+            public double GapMm;              // tubo libero accumulato dopo il cursore
+            public double AbsorbedGapMm;      // tubo libero già speso nel tratto di adattamento dopo l'ultimo pezzo
+            public readonly List<string> Built = new List<string>();
+            public readonly List<string> Skipped = new List<string>();
+            public int Index;                 // prossima voce della catena da costruire
+            public Assembly PausedAssembly;   // pezzo da allineare, già montato al banco, in attesa della quota
+            public double PausedNaturalMm;    // quota naturale del centro di quel pezzo
+            public double? ForcedCenterMm;    // quota imposta al prossimo pezzo allineato (dallo stacco gemello)
+        }
+
+        /// <summary>Catene ferme davanti al pezzo da allineare, per chiave "circuito|pezzo".</summary>
+        private readonly Dictionary<string, ChainState> _pausedChains = new Dictionary<string, ChainState>(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A fine costruzione: le catene rimaste senza gemello si completano alla quota naturale.</summary>
+        private void FinishPausedChains()
+        {
+            var pending = _pausedChains.Values.ToList();
+            _pausedChains.Clear();
+            foreach (var s in pending)
+            {
+                s.ForcedCenterMm = null;
+                RunChain(s);
+            }
+        }
+
+        private void RunChain(ChainState s)
+        {
+            var ctx = s.Ctx;
+            var stubStart = s.StubStart;
+            var dir = s.Dir;
+            var branch = s.Branch;
+            var label = s.Label;
+            var chainWhat = s.ChainWhat;
+            var provisionalEnd = s.ProvisionalEnd;
+            var bench = s.Bench;
+            var built = s.Built;
+            var skipped = s.Skipped;
+            ChainState resumePartner = null;
+
+            // collega l'inizio di un tubo appena creato a quello che c'è prima (pezzo o tratto di adattamento)
+            Action<MEPCurve, XYZ, string> connectStart = (pipe, at, w) =>
+            {
+                if (pipe == null) return;
+                if (s.PrevAdapter != null) MakeTransition(s.PrevAdapter, pipe, at, w);
+                else if (s.PrevPiece != null) Join(s.PrevPiece, pipe, at, w);
+            };
+
+            for (; s.Index < branch.Chain.Count; s.Index++)
+            {
+                var index = s.Index;
+                var item = branch.Chain[index];
+                if (item.Kind == StubItemKind.Gap)
+                {
+                    var taken = Math.Min(item.LengthMm, s.AbsorbedGapMm);
+                    s.AbsorbedGapMm -= taken;
+                    s.GapMm += item.LengthMm - taken;
+                    continue;
+                }
+
+                if (item.Kind == StubItemKind.Tee)
+                {
+                    var pointMm = s.CursorMm + s.GapMm;
+                    if (pointMm - s.CursorMm < 5) pointMm = s.CursorMm + 5; // un minimo di tubo per poterlo spezzare
+                    if (s.PrevAdapter != null && pointMm - s.CursorMm < AdapterMm) pointMm = s.CursorMm + AdapterMm; // posto per la riduzione
+                    var point = stubStart + dir * Units.MmToFt(pointMm);
+
+                    MEPCurve before;
+                    if (s.Pending != null)
+                    {
+                        if (!TrimCurve(s.Pending, s.PendingStart, point))
+                        {
+                            WarnOnce(chainWhat + "tubo non accorciato al T del bypass: T non creato, catena interrotta.");
+                            return;
+                        }
+                        before = s.Pending;
+                    }
+                    else
+                    {
+                        before = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, s.PendingStart, point, s.Size, label);
+                        if (before == null) return;
+                        connectStart(before, s.PendingStart, chainWhat);
+                    }
+                    // dopo il T lo stacco può cambiare misura (DN dopo il bypass): T ridotto
+                    if (item.SizeAfterMm > 0 && Math.Abs(item.SizeAfterMm - s.Size.DiameterMm) > 0.5)
+                    {
+                        s.Size = MepSize.Round(item.SizeAfterMm, true);
+                        Diag("  catena: dal T in poi DN" + MepSize.Fmt(item.SizeAfterMm) + ".");
+                    }
+                    var after = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, point, provisionalEnd, s.Size, label);
+                    if (after == null) return;
+                    s.PipeRadius = PipeRadius(after);
+
+                    var tee = PlaceBypassTee(ctx, branch, before, after, point, dir, s.Size, label, item.Label);
+                    // il T occupa spazio sull'asse: il cursore riparte dalla sua faccia verso l'utenza,
+                    // e il tubo "dopo" comincia lì (Revit lo ha accorciato)
+                    var prevFaceMm = s.CursorMm;
+                    var afterStartC = FindNearestEnd(after, point);
+                    s.PendingStart = afterStartC != null ? afterStartC.Origin : point;
+                    var newCursor = (s.PendingStart - stubStart).DotProduct(dir);
+                    s.CursorMm = Math.Max(pointMm, Units.FtToMm(newCursor));
+                    if (tee != null)
+                    {
+                        var teeNearMm = EndConnectors(tee).Select(c => Units.FtToMm((c.Origin - stubStart).DotProduct(dir))).DefaultIfEmpty(pointMm).Min();
+                        if (teeNearMm < prevFaceMm - 1 && s.PrevPiece != null)
+                            WarnOnce(chainWhat + "il T del bypass (faccia a " + PlanFormatter.Len(teeNearMm) + " dall'asse) tocca il pezzo precedente: aumenta il tubo libero attorno ai T.");
+                        built.Add(item.Label);
+                    }
+                    else
+                    {
+                        skipped.Add(item.Label);
+                    }
+                    s.Pending = after;
+                    s.PrevPiece = null;
+                    s.PrevAdapter = null;
+                    s.GapMm = 0;
+                    continue;
+                }
+
+                // ------------------------------------------------------------ pezzo in linea
+                var valve = item.Piece;
+                if (valve == null) continue;
+                var what = label + valve.KindLabel + " DN" + MepSize.Fmt(valve.DnMm) + ": ";
+                Assembly asm;
+                if (s.PausedAssembly != null)
+                {
+                    // ripresa: il pezzo è già montato al banco
+                    asm = s.PausedAssembly;
+                    s.PausedAssembly = null;
+                }
+                else
+                {
+                    var symbol = ResolveValveSymbol(valve, what);
+                    if (symbol == null)
+                    {
+                        skipped.Add(item.ToString());
+                        continue;
+                    }
+                    asm = MountAssembly(symbol, ctx, valve, bench, dir, s.PipeRadius, what);
+                    if (asm == null)
+                    {
+                        skipped.Add(item.ToString());
+                        continue;
+                    }
+                }
+                var reachMm = asm.ReachMm;
+                var pipeRadius = s.PipeRadius;
+
+                // misura degli attacchi del pezzo rispetto al tubo: se diversa (es. energy valve DN50 su
+                // uno stacco DN80) prima e dopo il pezzo va un tratto corto della sua misura e una riduzione
+                var nearConn = SideConnector(asm.Near, dir, false);
+                var farConn = SideConnector(asm.Far, dir, true);
+                var nearR = SafeRadius(nearConn);
+                var farR = SafeRadius(farConn);
+                // famiglia con un attacco solo (energy valve DN50): l'altra estremità ha la stessa
+                // misura dell'attacco che c'è, e la riduzione a valle va messa lo stesso
+                if (nearR <= 0 && farR > 0 && nearConn == null) nearR = farR;
+                if (farR <= 0 && nearR > 0 && farConn == null) farR = nearR;
+                var nearMismatch = nearR > 0 && pipeRadius > 0 && Math.Abs(nearR - pipeRadius) > Units.MmToFt(1);
+                var farMismatch = farR > 0 && pipeRadius > 0 && Math.Abs(farR - pipeRadius) > Units.MmToFt(1);
+
+                double centerMm;
+                if (item.CenterMm.HasValue && s.PrevPiece == null && built.Count == 0)
+                    centerMm = item.CenterMm.Value; // prima intercettazione: centrata alla distanza dall'asse
+                else
+                    centerMm = s.CursorMm + s.GapMm + reachMm;
+                var nearMm = centerMm - reachMm;
+                var farMm = centerMm + reachMm;
+                var direct = s.PrevPiece != null && s.PrevAdapter == null && !nearMismatch && nearMm - s.CursorMm < 1; // flangia contro flangia, nessun tubo
+                // tubo minimo prima del pezzo: qualche millimetro per crearlo, più il posto per le riduzioni
+                var required = (s.PrevPiece != null || s.PrevAdapter != null ? 5.0 : 0.0) + (s.PrevAdapter != null ? AdapterMm : 0) + (nearMismatch ? AdapterMm + 50 : 0);
+                if (!direct && required > 0 && nearMm - s.CursorMm < required)
+                {
+                    centerMm += required - (nearMm - s.CursorMm);
+                    nearMm = centerMm - reachMm;
+                    farMm = centerMm + reachMm;
+                }
+
+                // ---------------------------------------------- allineamento con lo stacco gemello
+                // Il pezzo con una chiave di allineamento (l'intercettazione in cima) deve stare alla
+                // stessa quota nelle catene di mandata e ritorno: la prima catena che ci arriva si
+                // ferma qui, col pezzo montato al banco; la seconda calcola la quota comune (la più
+                // alta delle due naturali), si completa e poi riprende la prima.
+                if (!string.IsNullOrWhiteSpace(item.AlignKey) && !string.IsNullOrWhiteSpace(branch.PairKey))
+                {
+                    var key = branch.PairKey + "|" + item.AlignKey;
+                    if (s.ForcedCenterMm.HasValue)
+                    {
+                        // ripresa: la quota l'ha decisa lo stacco gemello
+                        var forced = s.ForcedCenterMm.Value;
+                        s.ForcedCenterMm = null;
+                        if (forced > centerMm + 0.5)
+                        {
+                            Diag("  catena: " + item.AlignKey + " portata da " + PlanFormatter.Len(centerMm) + " a " + PlanFormatter.Len(forced) +
+                                 " dall'asse per allinearla allo stacco gemello.");
+                            NoteOnce(chainWhat + item.AlignKey + " alla stessa quota dello stacco gemello (" + PlanFormatter.Len(forced) +
+                                     " dall'asse, +" + PlanFormatter.Len(forced - centerMm) + " di tubo).");
+                            centerMm = forced;
+                            nearMm = centerMm - reachMm;
+                            farMm = centerMm + reachMm;
+                        }
+                        direct = false;
+                    }
+                    else
+                    {
+                        ChainState partner;
+                        if (_pausedChains.TryGetValue(key, out partner))
+                        {
+                            _pausedChains.Remove(key);
+                            var target = Math.Max(centerMm, partner.PausedNaturalMm);
+                            partner.ForcedCenterMm = target;
+                            resumePartner = partner;
+                            if (target > centerMm + 0.5)
+                            {
+                                Diag("  catena: " + item.AlignKey + " portata da " + PlanFormatter.Len(centerMm) + " a " + PlanFormatter.Len(target) +
+                                     " dall'asse per allinearla allo stacco gemello.");
+                                NoteOnce(chainWhat + item.AlignKey + " alla stessa quota dello stacco gemello (" + PlanFormatter.Len(target) +
+                                         " dall'asse, +" + PlanFormatter.Len(target - centerMm) + " di tubo).");
+                                centerMm = target;
+                                nearMm = centerMm - reachMm;
+                                farMm = centerMm + reachMm;
+                                direct = false;
+                            }
+                        }
+                        else
+                        {
+                            // primo dei due: si ferma qui finché l'altro non arriva allo stesso pezzo
+                            s.PausedAssembly = asm;
+                            s.PausedNaturalMm = centerMm;
+                            _pausedChains[key] = s;
+                            Diag("  catena: " + item.AlignKey + " in attesa dello stacco gemello (quota naturale " + PlanFormatter.Len(centerMm) + " dall'asse).");
+                            return;
+                        }
+                    }
+                }
+
+                if (nearMm < s.CursorMm - 1)
+                {
+                    WarnOnce(what + "entrerebbe nell'elemento precedente (faccia a " + PlanFormatter.Len(nearMm) + " dall'asse, precedente fino a " +
+                             PlanFormatter.Len(s.CursorMm) + "): non inserita.");
+                    DeleteAll(asm.Pieces);
+                    skipped.Add(item.ToString());
+                    continue;
+                }
+                var center = stubStart + dir * Units.MmToFt(centerMm);
+                var nearFace = stubStart + dir * Units.MmToFt(nearMm);
+                var farFace = stubStart + dir * Units.MmToFt(farMm);
+                var cut = reachMm > 1;
+
+                MEPCurve beforePipe = null; // tubo della misura dello stacco che arriva verso il pezzo
+                MEPCurve nearPipe = null;   // tubo che tocca il pezzo (lo stesso, o il tratto di adattamento)
+                if (!direct)
+                {
+                    var bigEnd = nearMismatch ? nearFace - dir * Units.MmToFt(AdapterMm) : nearFace;
+                    if (s.Pending != null)
+                    {
+                        if (!TrimCurve(s.Pending, s.PendingStart, bigEnd))
+                        {
+                            WarnOnce(what + "lo stacco non è stato accorciato per fare posto al pezzo: non inserita.");
+                            DeleteAll(asm.Pieces);
+                            skipped.Add(item.ToString());
+                            continue;
+                        }
+                        beforePipe = s.Pending;
+                    }
+                    else
+                    {
+                        beforePipe = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, s.PendingStart, bigEnd, s.Size, label);
+                        if (beforePipe != null && cut) connectStart(beforePipe, s.PendingStart, what);
+                    }
+                    nearPipe = beforePipe;
+                    if (beforePipe != null && nearMismatch)
+                    {
+                        var adapter = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, bigEnd, nearFace, SizeOfRadius(nearR), label);
+                        if (adapter != null && MakeTransition(beforePipe, adapter, bigEnd, what))
+                        {
+                            nearPipe = adapter;
+                            Diag("  catena: riduzione prima del pezzo, da Ø" + MepSize.Fmt(Math.Round(Units.FtToMm(2 * pipeRadius))) + " a Ø" +
+                                 MepSize.Fmt(Math.Round(Units.FtToMm(2 * nearR))) + " mm.");
+                        }
+                        else
+                        {
+                            // ripiego: il tubo dello stacco arriva alla faccia, il pezzo resta accostato
+                            if (adapter != null) DeleteCurve(adapter);
+                            TrimCurve(beforePipe, s.PendingStart, nearFace);
+                        }
+                    }
+                }
+
+                if (!PositionAssembly(asm, center, dir, what))
+                {
+                    WarnOnce(what + "pezzi non portati in posizione: annullo l'inserimento.");
+                    DeleteAll(asm.Pieces);
+                    skipped.Add(item.ToString());
+                    // il tubo resta accorciato alla faccia prevista: il prossimo pezzo riparte da lì
+                    if (beforePipe != null) { s.Pending = null; s.PendingStart = nearFace; s.CursorMm = nearMm; s.GapMm = 0; s.PrevPiece = null; s.PrevAdapter = null; }
+                    continue;
+                }
+
+                if (cut)
+                {
+                    if (direct) Join(s.PrevPiece, asm.Near, nearFace, what);
+                    else if (nearPipe != null) Join(nearPipe, asm.Near, nearFace, what);
+                    JoinAssembly(asm, center, dir, what);
+                }
+                RegisterAssembly(asm);
+                built.Add(item.ToString());
+                Diag("  catena: " + valve.KindLabel + " centro a " + PlanFormatter.Len(centerMm) + " dall'asse, facce a " +
+                     PlanFormatter.Len(nearMm) + " e " + PlanFormatter.Len(farMm) + (direct ? ", flangia contro flangia" : "") + ".");
+
+                s.PrevPiece = asm.Far;
+                s.PrevAdapter = null;
+                s.CursorMm = farMm;
+                s.GapMm = 0;
+                s.Pending = null;
+                s.PendingStart = farFace;
+
+                if (cut && farMismatch)
+                {
+                    // dopo il pezzo: un tratto della sua misura lungo quanto il tubo libero che segue
+                    // (così il tratto rettilineo richiesto sta ADIACENTE al pezzo, prima della riduzione),
+                    // poi la riduzione verso lo stacco, che mette il tubo successivo quando viene creato
+                    double following = 0;
+                    for (var k = index + 1; k < branch.Chain.Count && branch.Chain[k].Kind == StubItemKind.Gap; k++)
+                        following += branch.Chain[k].LengthMm;
+                    var adapterLenMm = Math.Max(AdapterMm, following);
+                    var adapterEnd = farFace + dir * Units.MmToFt(adapterLenMm);
+                    var adapter = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, farFace, adapterEnd, SizeOfRadius(farR), label);
+                    if (adapter != null)
+                    {
+                        // con un attacco solo il tratto resta accostato alla faccia (Join lo salta senza avvisi)
+                        if (farConn != null) Join(asm.Far, adapter, farFace, what);
+                        s.PrevAdapter = adapter;
+                        s.PendingStart = adapterEnd;
+                        s.CursorMm = farMm + adapterLenMm;
+                        s.AbsorbedGapMm = following; // il tubo libero che segue è già in questo tratto
+                        Diag("  catena: tratto di adattamento Ø" + MepSize.Fmt(Math.Round(Units.FtToMm(2 * farR))) + " mm lungo " +
+                             PlanFormatter.Len(adapterLenMm) + " dopo il pezzo, riduzione al tubo successivo.");
+                    }
+                }
+            }
+
+            // fine dello stacco: il tubo dopo l'ultimo pezzo, se fissato; altrimenti la lunghezza generica
+            var afterMm = branch.LengthAfterValveMm;
+            var endMm = afterMm.HasValue ? s.CursorMm + s.GapMm + afterMm.Value : Math.Max(branch.LengthMm, s.CursorMm + s.GapMm);
+            var end = stubStart + dir * Units.MmToFt(endMm);
+            if (endMm - s.CursorMm < 1)
+            {
+                if (s.Pending != null) DeleteCurve(s.Pending);
+            }
+            else if (s.Pending != null)
+            {
+                if (!TrimCurve(s.Pending, s.PendingStart, end))
+                    WarnOnce(chainWhat + "il tubo finale non è stato portato a " + PlanFormatter.Len(endMm) + " dall'asse.");
+            }
+            else
+            {
+                if (s.PrevAdapter != null && endMm - s.CursorMm < AdapterMm) { endMm = s.CursorMm + AdapterMm; end = stubStart + dir * Units.MmToFt(endMm); }
+                var last = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, s.PendingStart, end, s.Size, label);
+                connectStart(last, s.PendingStart, chainWhat);
+            }
+
+            NoteOnce(chainWhat + "montati " + built.Count + " elementi (" + string.Join(" → ", built) + "), stacco lungo " +
+                     PlanFormatter.Len(endMm) + " dall'asse del collettore." +
+                     (skipped.Count == 0 ? string.Empty : " Saltati: " + string.Join(", ", skipped) + "."));
+
+            // lo stacco gemello fermo davanti allo stesso pezzo riparte ora, alla quota comune
+            if (resumePartner != null) RunChain(resumePartner);
+        }
+
+        /// <summary>Tratto corto della misura del pezzo, prima e dopo un pezzo più piccolo del tubo, su cui si innesta la riduzione (mm).</summary>
+        private const double AdapterMm = 100;
+
+        private static double SafeRadius(Connector c)
+        {
+            try { return c == null ? 0 : c.Radius; } catch { return 0; }
+        }
+
+        private static MepSize SizeOfRadius(double radiusFt)
+        {
+            return MepSize.Round(Math.Round(Units.FtToMm(2 * radiusFt)), true);
+        }
+
+        /// <summary>
+        /// Connettore del pezzo dal lato chiesto (verso +dir = utenza, verso -dir = collettore);
+        /// null se da quel lato non c'è (famiglie con un attacco solo).
+        /// </summary>
+        private static Connector SideConnector(FamilyInstance fi, XYZ dir, bool farSide)
+        {
+            var cs = EndConnectors(fi);
+            if (cs.Count == 0) return null;
+            if (cs.Count == 1)
+            {
+                var t = (cs[0].Origin - Midpoint(fi)).DotProduct(dir);
+                return farSide ? (t > 0 ? cs[0] : null) : (t < 0 ? cs[0] : null);
+            }
+            var ordered = cs.OrderBy(c => c.Origin.DotProduct(dir)).ToList();
+            return farSide ? ordered[ordered.Count - 1] : ordered[0];
+        }
+
+        /// <summary>
+        /// Riduzione tra due tubi di misura diversa che si toccano nel punto dato: la transizione
+        /// del tipo di tubazione (preferenze di instradamento), che accorcia i tubi quanto le serve.
+        /// </summary>
+        private bool MakeTransition(MEPCurve a, MEPCurve b, XYZ point, string what)
+        {
+            try
+            {
+                var c1 = FindConnectorAt(a, point);
+                var c2 = FindConnectorAt(b, point);
+                if (c1 == null || c2 == null) throw new InvalidOperationException("connettori non trovati nel punto della riduzione.");
+                var fi = _doc.Create.NewTransitionFitting(c1, c2);
+                if (fi == null) throw new InvalidOperationException("Revit non ha restituito il raccordo.");
+                _doc.Regenerate();
+                _report.CreatedIds.Add(fi.Id);
+                _report.Fittings++;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "riduzione non creata (" + ex.Message + "): i tubi di misura diversa restano accostati ma scollegati. " +
+                         "Verifica che il tipo di tubazione abbia una transizione nelle preferenze di instradamento.");
+                return false;
+            }
+        }
+
+        private static Connector FindNearestEnd(MEPCurve curve, XYZ point)
+        {
+            Connector best = null;
+            var bestDist = double.MaxValue;
+            foreach (Connector c in curve.ConnectorManager.Connectors)
+            {
+                if (!IsPipeEnd(c)) continue;
+                var d = c.Origin.DistanceTo(point);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    best = c;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// T del bypass nel punto dato dello stacco: crea il tubo orizzontale verso lo stacco gemello
+        /// (sulla congiungente in pianta, fino a metà strada) e il raccordo a T tra i due tubi dello
+        /// stacco e quello. La metà costruita viene registrata: il bypass si chiude quando c'è
+        /// anche l'altra (<see cref="CompleteBypasses"/>). Null se il T non si crea.
+        /// </summary>
+        private FamilyInstance PlaceBypassTee(RunContext ctx, MepBranch branch, MEPCurve before, MEPCurve after, XYZ point, XYZ dir,
+            MepSize size, string label, string teeLabel)
+        {
+            var what = label + (teeLabel ?? "T del bypass") + ": ";
+            var bp = branch.Bypass;
+            if (bp == null)
+            {
+                WarnOnce(what + "nessun bypass previsto per questo stacco: T non creato.");
+                return null;
+            }
+
+            var left = XYZ.BasisZ.CrossProduct(ctx.Dir);
+            if (left.GetLength() < 1e-6) left = XYZ.BasisY;
+            left = left.Normalize();
+            // tubo orizzontale di questa metà: di traverso dalla mandata, lungo la base dal ritorno
+            var leg = ctx.Dir * Units.MmToFt(bp.LegAlongMm) + left * Units.MmToFt(bp.LegSideMm);
+            if (leg.GetLength() < Units.MmToFt(20))
+            {
+                WarnOnce(what + "tubo orizzontale del bypass troppo corto (" + PlanFormatter.Len(bp.LegLengthMm) + "): T non creato.");
+                return null;
+            }
+            var hdir = leg.Normalize();
+            if (Math.Abs(hdir.DotProduct(dir)) > 0.01)
+            {
+                WarnOnce(what + "il bypass non è perpendicolare allo stacco: previsto solo per stacchi verticali, T non creato.");
+                return null;
+            }
+            var end = point + leg;
+            // il bypass ha il DN di dopo il bypass (di norma quello dello stacco dopo il T)
+            if (bp.DnMm > 0 && Math.Abs(bp.DnMm - size.DiameterMm) > 0.5) size = MepSize.Round(bp.DnMm, true);
+            var branchPipe = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, point, end, size, label);
+            if (branchPipe == null) return null;
+
+            FamilyInstance tee = null;
+            try
+            {
+                var c1 = FindConnectorAt(before, point);
+                var c2 = FindConnectorAt(after, point);
+                var c3 = FindConnectorAt(branchPipe, point);
+                if (c1 == null || c2 == null || c3 == null) throw new InvalidOperationException("connettori dei tubi non trovati nel punto del T.");
+                tee = _doc.Create.NewTeeFitting(c1, c2, c3);
+                if (tee == null) throw new InvalidOperationException("Revit non ha restituito il raccordo.");
+                _doc.Regenerate();
+                _report.CreatedIds.Add(tee.Id);
+                _report.Fittings++;
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "raccordo a T non creato (" + ex.Message + "): il tubo del bypass resta scollegato. " +
+                         "Verifica che il tipo di tubazione abbia un raccordo a T nelle preferenze di instradamento.");
+            }
+
+            List<BypassHalf> halves;
+            if (!_bypassHalves.TryGetValue(bp.Key, out halves))
+            {
+                halves = new List<BypassHalf>();
+                _bypassHalves[bp.Key] = halves;
+            }
+            halves.Add(new BypassHalf
+            {
+                Key = bp.Key, Ctx = ctx, Label = label, Point = point, End = end, BranchPipe = branchPipe,
+                Dir = dir, Size = size, InlinePiece = bp.InlinePiece
+            });
+            Diag("  bypass " + bp.Key + ": T a " + VecMm(point) + ", tubo orizzontale verso " + Vec(hdir) + " lungo " +
+                 PlanFormatter.Len(bp.LegLengthMm) + (tee == null ? ", T NON creato." : ", T " + tee.Id + "."));
+            return tee;
+        }
+
+        /// <summary>
+        /// Chiude ogni bypass di cui esistono le due metà: un tratto lungo la direzione degli stacchi
+        /// tra le fini dei due tubi orizzontali (che in pianta coincidono), con la valvola di ritegno
+        /// al centro e un gomito a ciascun capo. Va chiamato dopo aver costruito tutti i tratti.
+        /// </summary>
+        private void CompleteBypasses()
+        {
+            foreach (var kv in _bypassHalves)
+            {
+                var what = "Bypass " + kv.Key + ": ";
+                var halves = kv.Value;
+                if (halves.Count != 2)
+                {
+                    WarnOnce(what + "T presente su " + halves.Count + " stacchi su 2: bypass non chiuso.");
+                    continue;
+                }
+                var a = halves[0];
+                var b = halves[1];
+                if (a.BranchPipe == null || b.BranchPipe == null) continue;
+
+                var delta = b.End - a.End;
+                var rise = delta.DotProduct(a.Dir);
+                var planGap = (delta - a.Dir * rise).GetLength();
+                if (planGap > Units.MmToFt(20))
+                {
+                    WarnOnce(what + "i due tubi orizzontali non si incontrano in pianta (scarto " + PlanFormatter.Len(Units.FtToMm(planGap)) +
+                             "): bypass non chiuso.");
+                    continue;
+                }
+                var lo = rise >= 0 ? a : b;
+                var hi = rise >= 0 ? b : a;
+                var hMm = Units.FtToMm(Math.Abs(rise));
+                var dn = a.Size == null ? 50 : a.Size.DiameterMm;
+                // spazio per un gomito a ciascun capo: circa 1,5 DN di tangente più un margine
+                var elbowMm = 1.5 * dn + 20;
+                if (hMm < 2 * elbowMm)
+                {
+                    WarnOnce(what + "dislivello tra i due T di soli " + PlanFormatter.Len(hMm) + ": non c'è posto per i gomiti, bypass non chiuso.");
+                    continue;
+                }
+
+                var vertical = CreateCurve(MepKind.Pipe, lo.Ctx.SystemId, lo.Ctx.TypeId, lo.Ctx.Level.Id, lo.End, hi.End, lo.Size, what);
+                if (vertical == null) continue;
+
+                if (a.InlinePiece != null)
+                {
+                    var piece = new MepValve
+                    {
+                        Kind = a.InlinePiece.Kind, FamilyName = a.InlinePiece.FamilyName, TypeName = a.InlinePiece.TypeName,
+                        DnMm = a.InlinePiece.DnMm, PnBar = a.InlinePiece.PnBar, WithFlanges = a.InlinePiece.WithFlanges,
+                        RollDegrees = a.InlinePiece.RollDegrees, DistanceMm = hMm / 2.0
+                    };
+                    var fake = new MepBranch { LengthMm = hMm, Valve = piece, Size = lo.Size };
+                    PlaceValve(lo.Ctx, vertical, lo.End, a.Dir, fake, lo.Size, what, elbowMm);
+                }
+
+                // gomiti: in basso tra il tubo orizzontale e il tratto verticale, in alto con l'ultimo tubo che arriva alla fine
+                var top = PipeEndingAt(hi.End) ?? vertical;
+                MakeElbow(lo.BranchPipe, vertical, lo.End, what + "gomito in basso: ");
+                MakeElbow(hi.BranchPipe, top, hi.End, what + "gomito in alto: ");
+                Diag("  bypass " + kv.Key + " chiuso: tratto verticale " + PlanFormatter.Len(hMm) + " tra " + VecMm(lo.End) + " e " + VecMm(hi.End) + ".");
+            }
+        }
+
+        /// <summary>Tubo creato in questa costruzione con un'estremità libera nel punto dato.</summary>
+        private MEPCurve PipeEndingAt(XYZ point)
+        {
+            foreach (var id in Enumerable.Reverse(_report.CreatedIds))
+            {
+                var curve = _doc.GetElement(id) as MEPCurve;
+                if (curve == null) continue;
+                var c = FindConnectorAt(curve, point);
+                if (c != null && !c.IsConnected) return curve;
+            }
+            return null;
+        }
+
+        private void MakeElbow(MEPCurve first, MEPCurve second, XYZ point, string what)
+        {
+            try
+            {
+                var c1 = FindConnectorAt(first, point);
+                var c2 = FindConnectorAt(second, point);
+                if (c1 == null || c2 == null) throw new InvalidOperationException("connettori non trovati nel punto del gomito.");
+                var fi = _doc.Create.NewElbowFitting(c1, c2);
+                if (fi == null) throw new InvalidOperationException("Revit non ha restituito il raccordo.");
+                _doc.Regenerate();
+                _report.CreatedIds.Add(fi.Id);
+                _report.Fittings++;
+            }
+            catch (Exception ex)
+            {
+                WarnOnce(what + "gomito non creato (" + ex.Message + "): i tubi restano scollegati.");
+            }
         }
 
         /// <summary>
@@ -754,6 +1579,18 @@ namespace SayRevit.Addin.Revit
             Diag(what + "famiglia \"" + ModelCatalogReader.SafeFamilyName(symbol) + "\" tipo \"" + symbol.Name +
                  "\" (" + PlacementTypeOf(symbol) + "): stacco " + Vec(dir) + ", Z famiglia → " + Vec(zDir) + ", Y famiglia → " + Vec(yDir) +
                  ", rollio " + MepSize.Fmt(Math.Round(roll * 180 / Math.PI)) + "°.");
+
+            // Una famiglia rimasta basata sul livello non si inclina: Revit la lascia orizzontale
+            // anche quando i connettori dicono il contrario (è così che flange e valvole finivano
+            // di traverso). Su un tubo non orizzontale non si monta: meglio saltarla e dirlo.
+            if (Math.Abs(dir.Z) > 0.01 && !IsWorkPlaneBased(symbol))
+            {
+                WarnOnce(what + "la famiglia \"" + ModelCatalogReader.SafeFamilyName(symbol) + "\" è ancora basata sul livello e non è stato possibile " +
+                         "convertirla e ricaricarla (vedi gli avvisi sulle famiglie): su uno stacco verticale resterebbe orizzontale, quindi non viene montata. " +
+                         "Chiudi eventuali finestre di quella famiglia aperte in Revit e riprova, oppure aprila, attiva \"Basata su piano di lavoro\" e ricaricala.");
+                Diag("  saltata: famiglia basata sul livello su stacco non orizzontale.");
+                return null;
+            }
 
             var how = "piano di lavoro con direzione";
             var fi = PlaceOnPlane(symbol, at, dir, zDir, yDir, true, wantRadius, what, how);
@@ -851,20 +1688,37 @@ namespace SayRevit.Addin.Revit
         {
             if (fi == null) return null;
             if (wantRadius > 0) TrySizeFitting(fi, wantRadius);
-            if (EndConnectors(fi).Count < 2)
+            var ends = EndConnectors(fi).Count;
+            if (ends == 0)
             {
-                WarnOnce(what + "la famiglia \"" + fi.Symbol.Name + "\" non ha due connettori in linea: non si può montare sul tubo.");
-                Diag("  " + how + ": " + EndConnectors(fi).Count + " connettori di estremità, servono 2.");
+                WarnOnce(what + "la famiglia \"" + fi.Symbol.Name + "\" non ha connettori di tubazione: non si può montare sul tubo.");
+                Diag("  " + how + ": nessun connettore di tubazione, ne servono 2.");
                 Discard(fi);
                 return null;
             }
+            if (ends == 1)
+                NoteOnce(what + "la famiglia \"" + fi.Symbol.Name + "\" ha un solo connettore di tubazione: viene collegata da quel lato, " +
+                         "l'altra estremità è la faccia opposta letta dalla geometria (il tubo ci arriva ma non risulta collegato).");
 
             Diag("  " + how + ", appena creata: " + Describe(fi, at, dir, up, normal));
             var oriented = Orient(fi, dir, up, how);
             CenterAt(fi, at, what);
             var aligned = IsAligned(fi, dir);
+            // Controllo anche sulla geometria: con una famiglia basata sul livello Revit può
+            // riportare i connettori girati come chiesto e lasciare il corpo orizzontale. Se il
+            // corpo si estende lungo il tubo meno della luce tra i connettori, il pezzo è di traverso.
+            var bodyAlong = 0.0;
+            var luce = InlineLength(fi);
+            if (aligned && luce > Units.MmToFt(20))
+            {
+                var ext = Extents(fi, dir, up, normal);
+                bodyAlong = ext == null ? luce : ext[0];
+                if (bodyAlong < luce - Units.MmToFt(5)) aligned = false;
+            }
             Diag("  " + how + ", dopo orientamento: " + Describe(fi, at, dir, up, normal) +
-                 " → rotazioni " + (oriented ? "riuscite" : "RIFIUTATE") + ", connettori " + (aligned ? "in asse" : "NON in asse") + ".");
+                 " → rotazioni " + (oriented ? "riuscite" : "RIFIUTATE") + ", connettori " + (aligned ? "in asse" : "NON in asse") +
+                 (bodyAlong > 0 && bodyAlong < luce - Units.MmToFt(5) ? " (corpo lungo il tubo " + PlanFormatter.Len(Units.FtToMm(bodyAlong)) +
+                  " contro una luce di " + PlanFormatter.Len(Units.FtToMm(luce)) + ": è di traverso)" : "") + ".");
             if (aligned) return fi;
             Discard(fi);
             return null;
@@ -1001,6 +1855,20 @@ namespace SayRevit.Addin.Revit
                    PlanFormatter.Len(Units.FtToMm(ext[1])) + " × " + PlanFormatter.Len(Units.FtToMm(ext[2]));
         }
 
+        private static bool IsWorkPlaneBased(FamilySymbol symbol)
+        {
+            try
+            {
+                if (symbol.Family.FamilyPlacementType == FamilyPlacementType.WorkPlaneBased) return true;
+                var p = symbol.Family.get_Parameter(BuiltInParameter.FAMILY_WORK_PLANE_BASED);
+                return p != null && p.AsInteger() == 1;
+            }
+            catch
+            {
+                return true; // in dubbio si prova: la verifica sui connettori resta
+            }
+        }
+
         private static string PlacementTypeOf(FamilySymbol symbol)
         {
             try
@@ -1110,10 +1978,8 @@ namespace SayRevit.Addin.Revit
 
         private static XYZ Midpoint(FamilyInstance fi)
         {
-            var cs = EndConnectors(fi);
-            if (cs.Count >= 2) return (cs[0].Origin + cs[1].Origin) / 2.0;
-            var lp = fi.Location as LocationPoint;
-            return lp == null ? XYZ.Zero : lp.Point;
+            var ends = EndPoints(fi);
+            return (ends[0] + ends[1]) / 2.0;
         }
 
         private static bool IsAligned(FamilyInstance fi, XYZ dir)
@@ -1232,11 +2098,26 @@ namespace SayRevit.Addin.Revit
             var cb = NearestConnector(b, point);
             if (ca == null || cb == null)
             {
+                if ((ca == null && HasSingleConnector(a)) || (cb == null && HasSingleConnector(b)))
+                {
+                    Diag("  giunzione saltata: la famiglia ha un solo connettore e questo è il lato senza.");
+                    return;
+                }
                 WarnOnce(what + "connettori non trovati nel punto di giunzione: pezzo lasciato scollegato.");
                 return;
             }
             try
             {
+                // misure diverse (es. filtro DN40 su un circuito DN25): collegarli porta Revit a
+                // invertire o cancellare il tubo al commit; meglio lasciarli accostati e dirlo
+                double ra = 0, rb = 0;
+                try { ra = ca.Radius; rb = cb.Radius; } catch { }
+                if (ra > 0 && rb > 0 && Math.Abs(ra - rb) > Units.MmToFt(1))
+                {
+                    WarnOnce(what + "misure diverse nel punto di giunzione (Ø" + MepSize.Fmt(Math.Round(Units.FtToMm(2 * ra))) + " e Ø" +
+                             MepSize.Fmt(Math.Round(Units.FtToMm(2 * rb))) + " mm): pezzi accostati ma non collegati, serve una riduzione o una famiglia della misura giusta.");
+                    return;
+                }
                 if (!ca.IsConnectedTo(cb)) ca.ConnectTo(cb);
             }
             catch (Exception ex)
@@ -1261,7 +2142,7 @@ namespace SayRevit.Addin.Revit
             var bestDist = double.MaxValue;
             foreach (Connector c in cm.Connectors)
             {
-                if (c.ConnectorType != ConnectorType.End) continue;
+                if (!IsPipeEnd(c)) continue;
                 var d = c.Origin.DistanceTo(point);
                 if (d >= bestDist) continue;
                 bestDist = d;
@@ -1277,7 +2158,7 @@ namespace SayRevit.Addin.Revit
             if (cm == null) return list;
             foreach (Connector c in cm.Connectors)
             {
-                if (c.ConnectorType == ConnectorType.End) list.Add(c);
+                if (IsPipeEnd(c)) list.Add(c);
             }
             return list;
         }
@@ -1287,12 +2168,68 @@ namespace SayRevit.Addin.Revit
             return EndConnectors(e).OrderBy(c => c.Origin.DotProduct(dir)).ToList();
         }
 
-        /// <summary>Luce che il pezzo occupa sul tubo: distanza tra i connettori misurata sull'asse.</summary>
-        private static double InlineLength(FamilyInstance fi)
+        /// <summary>
+        /// Le due estremità del pezzo sul suo asse: le origini dei connettori. Se la famiglia ha un
+        /// connettore solo (la energy valve DN50 è così), la seconda estremità è la faccia opposta
+        /// letta dalla geometria: il corpo si estende dal connettore in verso contrario alla sua
+        /// direzione. Così anche quei pezzi si centrano e si misurano come gli altri; restano
+        /// collegati da un lato solo.
+        /// </summary>
+        private static List<XYZ> EndPoints(FamilyInstance fi)
         {
             var cs = EndConnectors(fi);
-            if (cs.Count < 2) return 0;
-            var v = cs[1].Origin - cs[0].Origin;
+            if (cs.Count == 2) return new List<XYZ> { cs[0].Origin, cs[1].Origin };
+            if (cs.Count > 2)
+            {
+                // raccordo a T o croce: l'ordine dei connettori non è stabile (cambia al commit),
+                // quindi si usa il punto di inserimento, che non dipende da quale coppia si legge
+                var lpt = fi.Location as LocationPoint;
+                if (lpt != null) return new List<XYZ> { lpt.Point, lpt.Point };
+                var avg = XYZ.Zero;
+                foreach (var c in cs) avg += c.Origin;
+                avg /= cs.Count;
+                return new List<XYZ> { avg, avg };
+            }
+            if (cs.Count == 1)
+            {
+                var o = cs[0].Origin;
+                XYZ z = null;
+                try { z = cs[0].CoordinateSystem.BasisZ; } catch { }
+                if (z != null && z.GetLength() > 1e-9)
+                {
+                    z = z.Normalize();
+                    // solo i vertici vicini all'asse: il corpo del tubo, non l'attuatore che sporge
+                    // di lato e si allunga oltre la faccia d'attacco
+                    double radius = 0;
+                    try { radius = cs[0].Radius; } catch { }
+                    var lateralMax = Math.Max(2.0 * radius, Units.MmToFt(30));
+                    double far = 0;
+                    foreach (var v in Vertices(fi))
+                    {
+                        var rel = v - o;
+                        var t = -rel.DotProduct(z);
+                        var lateral = (rel + z * t).GetLength();
+                        if (lateral > lateralMax) continue;
+                        if (t > far) far = t;
+                    }
+                    return new List<XYZ> { o, o - z * far };
+                }
+            }
+            var lp = fi.Location as LocationPoint;
+            var p = lp == null ? XYZ.Zero : lp.Point;
+            return new List<XYZ> { p, p };
+        }
+
+        private static bool HasSingleConnector(Element e)
+        {
+            return e is FamilyInstance && EndConnectors(e).Count == 1;
+        }
+
+        /// <summary>Luce che il pezzo occupa sul tubo: distanza tra le estremità misurata sull'asse.</summary>
+        private static double InlineLength(FamilyInstance fi)
+        {
+            var ends = EndPoints(fi);
+            var v = ends[1] - ends[0];
             var axis = AxisOf(fi);
             return axis == null ? v.GetLength() : Math.Abs(v.DotProduct(axis));
         }
@@ -1310,7 +2247,7 @@ namespace SayRevit.Addin.Revit
             {
                 foreach (Connector c in curve.ConnectorManager.Connectors)
                 {
-                    if (c.ConnectorType == ConnectorType.End) return c.Radius;
+                    if (IsPipeEnd(c)) return c.Radius;
                 }
             }
             catch
@@ -1463,7 +2400,8 @@ namespace SayRevit.Addin.Revit
                     // dall'asse, semplicemente sovrapposto.
                     var freeEnd = point + bdir * Units.MmToFt(branch.LengthMm);
                     var free = CreateCurve(ctx.Run.Kind, ctx.SystemId, ctx.TypeId, ctx.Level.Id, point, freeEnd, size, label);
-                    PlaceValve(ctx, free, point, bdir, branch, size, label);
+                    if (branch.Chain.Count > 0) BuildChain(ctx, free, point, bdir, branch, size, label);
+                    else PlaceValve(ctx, free, point, bdir, branch, size, label);
                     continue;
                 }
 
@@ -1481,7 +2419,8 @@ namespace SayRevit.Addin.Revit
                 ConnectBranch(ctx, piece, point, branchCurve, label);
                 // La valvola va inserita DOPO il raccordo: inserendola prima si spezzerebbe lo
                 // stacco e il connettore da raccordare non sarebbe più su questo elemento.
-                PlaceValve(ctx, branchCurve, point, bdir, branch, size, label);
+                if (branch.Chain.Count > 0) BuildChain(ctx, branchCurve, point, bdir, branch, size, label);
+                else PlaceValve(ctx, branchCurve, point, bdir, branch, size, label);
             }
         }
 
@@ -1653,7 +2592,7 @@ namespace SayRevit.Addin.Revit
             var bestDist = double.MaxValue;
             foreach (Connector c in curve.ConnectorManager.Connectors)
             {
-                if (c.ConnectorType != ConnectorType.End) continue;
+                if (!IsPipeEnd(c)) continue;
                 var d = c.Origin.DistanceTo(point);
                 if (d < bestDist)
                 {
@@ -2052,20 +2991,43 @@ namespace SayRevit.Addin.Revit
 
             public FailureProcessingResult PreprocessFailures(FailuresAccessor failuresAccessor)
             {
+                var resolved = false;
                 foreach (var f in failuresAccessor.GetFailureMessages())
                 {
+                    string text = "?";
                     try
                     {
-                        _owner.Diag("Revit [" + f.GetSeverity() + "]: " + f.GetDescriptionText() + " — elementi " +
-                                    string.Join(", ", f.GetFailingElementIds().Select(id => id.ToString())));
+                        text = f.GetDescriptionText() + " — elementi " + string.Join(", ", f.GetFailingElementIds().Select(id => id.ToString()));
+                        _owner.Diag("Revit [" + f.GetSeverity() + "]: " + text);
                     }
                     catch
                     {
                         // solo diagnostica
                     }
-                    if (f.GetSeverity() == FailureSeverity.Warning) failuresAccessor.DeleteWarning(f);
+                    if (f.GetSeverity() == FailureSeverity.Warning)
+                    {
+                        failuresAccessor.DeleteWarning(f);
+                        continue;
+                    }
+                    // Errore: senza intervento Revit apre una finestra e il banco resta fermo finché
+                    // qualcuno non la chiude. Si applica la risoluzione predefinita (di solito la
+                    // cancellazione dell'elemento) e lo si dichiara; la verifica dopo il commit
+                    // segnala comunque quello che è sparito.
+                    try
+                    {
+                        if (f.HasResolutions())
+                        {
+                            failuresAccessor.ResolveFailure(f);
+                            resolved = true;
+                            _owner.WarnOnce("Revit ha segnalato un errore alla chiusura della transazione e si è applicata la risoluzione predefinita: " + text);
+                        }
+                    }
+                    catch
+                    {
+                        // nessuna risoluzione applicabile: resta la finestra di Revit
+                    }
                 }
-                return FailureProcessingResult.Continue;
+                return resolved ? FailureProcessingResult.ProceedWithCommit : FailureProcessingResult.Continue;
             }
         }
 
@@ -2223,20 +3185,17 @@ namespace SayRevit.Addin.Revit
                     t.Commit();
                 }
 
+                // LoadFamily vuole il progetto SENZA transazioni aperte: se fallisce, l'errore vero
+                // va riportato così com'è (un secondo tentativo dentro una transazione fallirebbe
+                // sempre, nascondendo la causa).
                 Family loaded;
                 try
                 {
                     loaded = famDoc.LoadFamily(_doc, new OverwriteFamily());
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // alcune versioni vogliono una transazione aperta sul progetto di destinazione
-                    using (var t2 = new Transaction(_doc, "sayRevit: ricarica famiglia"))
-                    {
-                        t2.Start();
-                        loaded = famDoc.LoadFamily(_doc, new OverwriteFamily());
-                        t2.Commit();
-                    }
+                    throw new InvalidOperationException("ricarica nel progetto non riuscita: " + ex.Message, ex);
                 }
                 Diag("Famiglia \"" + name + "\": " + (madePlaneBased ? "resa basata su piano di lavoro e " : "") + "ricaricata (" +
                      (loaded == null ? "esito ignoto" : "ok") + ").");
@@ -2291,9 +3250,11 @@ namespace SayRevit.Addin.Revit
             try
             {
                 LoadCollections();
-                PrepareValveFamilies(new[] { plan.BallValveFamily, plan.ButterflyValveFamily });
+                // tutte le famiglie che il piano può montare: base e soglie per DN di ogni elemento
+                PrepareValveFamilies(plan.ConfiguredFamilies());
 
                 var footprints = new List<StubFootprint>();
+                var extras = new List<StubFootprint>();
                 var cache = new Dictionary<string, StubFootprint>();
                 foreach (var circuit in plan.ValidCircuits())
                 {
@@ -2302,21 +3263,61 @@ namespace SayRevit.Addin.Revit
                     var dn = circuit.DnMm;
                     var fp = StubFootprint.PipeOnly(dn, plan.CircuitLengthFor(circuit));
                     var valve = plan.ValveFor(circuit);
+                    StubFootprint extra = null;
                     if (valve != null)
                     {
-                        var key = valve.FamilyName + "|" + valve.TypeName + "|" + valve.WithFlanges + "|" + valve.RollDegrees + "|" + valve.DistanceMm + "|" + dn;
-                        StubFootprint measured;
-                        if (!cache.TryGetValue(key, out measured))
+                        // tratto verticale del bypass: sulla verticale della base del ritorno, con la
+                        // valvola di ritegno (o il solo tubo); alto quanto lo stacco, per prudenza
+                        var bypass = plan.BypassFor(circuit, 0, true);
+                        if (bypass != null)
                         {
-                            measured = MeasureFootprint(plan, valve, dn);
-                            cache[key] = measured;
+                            extra = StubFootprint.PipeOnly(dn, plan.CircuitLengthFor(circuit));
+                            if (bypass.InlinePiece != null)
+                            {
+                                var key = "bypass|" + bypass.InlinePiece.FamilyName + "/" + bypass.InlinePiece.TypeName + "/" + bypass.InlinePiece.RollDegrees + "|" + dn;
+                                StubFootprint measured;
+                                if (!cache.TryGetValue(key, out measured))
+                                {
+                                    measured = MeasureFootprint(plan, new List<StubItem> { StubItem.Of(bypass.InlinePiece, plan.ValveAxisDistanceMm) }, dn);
+                                    cache[key] = measured;
+                                }
+                                if (measured != null)
+                                    extra = extra.Union(new StubFootprint
+                                    {
+                                        AlongMinMm = measured.AlongMinMm, AlongMaxMm = measured.AlongMaxMm,
+                                        SideMinMm = measured.SideMinMm, SideMaxMm = measured.SideMaxMm,
+                                        UpMinMm = 0, UpMaxMm = plan.CircuitLengthFor(circuit)
+                                    });
+                            }
+                            extra.SideMinMm += bypass.LegSideMm;
+                            extra.SideMaxMm += bypass.LegSideMm;
                         }
-                        fp = fp.Union(measured);
+                    }
+                    extras.Add(extra);
+                    if (valve != null)
+                    {
+                        // con la catena (mix 2 vie) si misurano tutti i pezzi, di mandata e di ritorno
+                        var chains = plan.HasChain(circuit)
+                            ? new[] { plan.ChainFor(circuit, true), plan.ChainFor(circuit, false) }
+                            : new[] { new List<StubItem> { StubItem.Of(valve, valve.DistanceMm) } };
+                        foreach (var chain in chains)
+                        {
+                            var key = string.Join("|", chain.Select(i => i.Kind == StubItemKind.Piece && i.Piece != null
+                                ? i.Piece.FamilyName + "/" + i.Piece.TypeName + "/" + i.Piece.WithFlanges + "/" + i.Piece.RollDegrees + "/" + i.CenterMm
+                                : i.Kind + "/" + i.LengthMm)) + "|" + dn;
+                            StubFootprint measured;
+                            if (!cache.TryGetValue(key, out measured))
+                            {
+                                measured = MeasureFootprint(plan, chain, dn);
+                                cache[key] = measured;
+                            }
+                            fp = fp.Union(measured);
+                        }
                     }
                     footprints.Add(fp);
                 }
 
-                var r = plan.ApplyAutoSpacing(footprints, plan.HeaderOuterRadiusMm);
+                var r = plan.ApplyAutoSpacing(footprints, extras, plan.HeaderOuterRadiusMm);
                 NoteOnce("Interasse automatico: " + MepSize.Fmt(r.SpacingMm) + " mm (minimo richiesto " + MepSize.Fmt(plan.SpacingFloorMm) + " mm).");
                 foreach (var n in r.Notes) NoteOnce(n);
                 foreach (var w in r.Warnings) WarnOnce(w);
@@ -2332,7 +3333,7 @@ namespace SayRevit.Addin.Revit
         /// Ingombro reale (mm, riferito all'asse dello stacco e al collettore) di valvola e flange di
         /// un circuito, misurato montandole in una zona di prova dentro una transazione annullata.
         /// </summary>
-        private StubFootprint MeasureFootprint(ManifoldPlan plan, MepValve valve, double dnMm)
+        private StubFootprint MeasureFootprint(ManifoldPlan plan, IList<StubItem> chain, double dnMm)
         {
             var level = _levels == null ? null : _levels.FirstOrDefault();
             var pipeType = _pipeTypes == null ? null
@@ -2340,11 +3341,10 @@ namespace SayRevit.Addin.Revit
             if (level == null || pipeType == null) return null;
 
             var dir = plan.CircuitDirection == DirectionKind.Down ? XYZ.BasisZ.Negate() : XYZ.BasisZ;
-            var roll = valve.RollDegrees * Math.PI / 180.0;
             var axisPoint = new XYZ(0, 0, Units.MmToFt(60000)); // zona di prova, lontana dal modello
-            var center = axisPoint + dir * Units.MmToFt(valve.DistanceMm);
-            var what = "misura " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + ": ";
+            var bench = axisPoint + dir * Units.MmToFt(20000);
             var ctx = new RunContext { Level = level, TypeId = pipeType.Id, Run = new MepRun { Kind = MepKind.Pipe }, Dir = dir };
+            var pipeRadius = Units.MmToFt(dnMm / 2.0);
 
             StubFootprint fp = null;
             using (var t = new Transaction(_doc, "sayRevit: misura ingombro valvola"))
@@ -2352,35 +3352,31 @@ namespace SayRevit.Addin.Revit
                 t.Start();
                 try
                 {
+                    // stessa regola della costruzione: primo pezzo centrato alla sua distanza, gli
+                    // altri dalla faccia del precedente più il tubo libero; il T vale due DN
                     var pieces = new List<FamilyInstance>();
-                    var symbol = ResolveValveSymbol(valve, what);
-                    var body = symbol == null ? null : PlaceInline(symbol, ctx, center, dir, roll, 0, what);
-                    if (body != null)
+                    double cursorMm = 0, gapMm = 0;
+                    var first = true;
+                    foreach (var item in chain)
                     {
-                        pieces.Add(body);
-                        var half = BodyLength(body, dir) / 2.0;
-                        CenterAt(body, center, what);
-                        if (valve.WithFlanges)
-                        {
-                            var flangeSymbol = ResolveFlangeSymbol(ctx, valve, what);
-                            if (flangeSymbol != null)
-                            {
-                                var pipeRadius = Units.MmToFt(dnMm / 2.0);
-                                var first = PlaceInline(flangeSymbol, ctx, center - dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
-                                var second = PlaceInline(flangeSymbol, ctx, center + dir * Units.MmToFt(1000), dir, roll, pipeRadius, what);
-                                if (first != null && second != null)
-                                {
-                                    var fl = BodyLength(first, dir);
-                                    OrientFlange(first, dir, PlaneUp(dir, roll), true, what);
-                                    OrientFlange(second, dir, PlaneUp(dir, roll), false, what);
-                                    CenterAt(first, center - dir * (half + fl / 2.0), what);
-                                    CenterAt(second, center + dir * (half + fl / 2.0), what);
-                                    pieces.Add(first);
-                                    pieces.Add(second);
-                                }
-                            }
-                        }
+                        if (item.Kind == StubItemKind.Gap) { gapMm += item.LengthMm; continue; }
+                        if (item.Kind == StubItemKind.Tee) { cursorMm += gapMm + 2 * dnMm; gapMm = 0; continue; }
+                        var valve = item.Piece;
+                        if (valve == null) continue;
+                        var what = "misura " + valve.KindLabel + " DN" + MepSize.Fmt(valve.DnMm > 0 ? valve.DnMm : dnMm) + ": ";
+                        var symbol = ResolveValveSymbol(valve, what);
+                        // ogni pezzo con le flange della propria misura (dopo il T il DN può cambiare)
+                        var pieceRadius = valve.DnMm > 0 ? Units.MmToFt(valve.DnMm / 2.0) : pipeRadius;
+                        var asm = symbol == null ? null : MountAssembly(symbol, ctx, valve, bench, dir, pieceRadius, what);
+                        if (asm == null) { cursorMm += gapMm + plan.ValveAssemblyAllowanceMm; gapMm = 0; first = false; continue; }
+                        var centerMm = first && item.CenterMm.HasValue ? item.CenterMm.Value : cursorMm + gapMm + asm.ReachMm;
+                        PositionAssembly(asm, axisPoint + dir * Units.MmToFt(centerMm), dir, what);
+                        pieces.AddRange(asm.Pieces);
+                        cursorMm = centerMm + asm.ReachMm;
+                        gapMm = 0;
+                        first = false;
                     }
+                    var kindLabel = chain.Count == 1 && chain[0].Piece != null ? chain[0].Piece.KindLabel : "catena di " + chain.Count(i => i.Kind != StubItemKind.Gap) + " elementi";
 
                     var along = new[] { double.MaxValue, double.MinValue };
                     var side = new[] { double.MaxValue, double.MinValue };
@@ -2405,11 +3401,11 @@ namespace SayRevit.Addin.Revit
                             SideMinMm = Units.FtToMm(side[0]), SideMaxMm = Units.FtToMm(side[1]),
                             UpMinMm = Units.FtToMm(up[0]), UpMaxMm = Units.FtToMm(up[1])
                         };
-                        Diag("Ingombro " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + " (" + pieces.Count + " pezzi): " + fp);
+                        Diag("Ingombro " + kindLabel + " DN" + MepSize.Fmt(dnMm) + " (" + pieces.Count + " pezzi): " + fp);
                     }
                     else
                     {
-                        Diag("Ingombro " + valve.KindLabel + " DN" + MepSize.Fmt(dnMm) + ": nessun pezzo montabile, si considera solo il tubo.");
+                        Diag("Ingombro " + kindLabel + " DN" + MepSize.Fmt(dnMm) + ": nessun pezzo montabile, si considera solo il tubo.");
                     }
                 }
                 finally

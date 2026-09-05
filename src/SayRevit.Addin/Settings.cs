@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using SayRevit.Core.Model;
 
 namespace SayRevit.Addin
 {
@@ -42,8 +44,6 @@ namespace SayRevit.Addin
         public bool ManifoldWithValves { get; set; } = true;
         /// <summary>DN massimo (incluso) per la valvola a sfera; oltre si usa la boax.</summary>
         public double ManifoldBallValveMaxDnMm { get; set; } = 32;
-        public string ManifoldBallValveFamily { get; set; } = string.Empty;
-        public string ManifoldButterflyValveFamily { get; set; } = string.Empty;
         /// <summary>PN preferito nei nomi dei tipi delle valvole; 0 = indifferente.</summary>
         public double ManifoldValvePnBar { get; set; } = 16;
         /// <summary>Distanza dal bordo esterno del collettore al centro della valvola (mm).</summary>
@@ -52,6 +52,37 @@ namespace SayRevit.Addin
         public double ManifoldButterflyRollDeg { get; set; } = 90;
         /// <summary>Rotazione della valvola a sfera attorno all'asse del tubo (gradi).</summary>
         public double ManifoldBallRollDeg { get; set; } = 90;
+
+        // --- famiglie degli elementi (registro ManifoldElements): una chiave per elemento ---
+        // Ogni chiave "…Family" (es. ManifoldZoneValveFamily) è una famiglia per DN nella forma di
+        // FamilyByDn: "famiglia" oppure "famiglia|40=altra|100=terza" (soglie "da DN in su").
+        // Per la energy valve il vuoto significa "automatica sul nome" (ev025r2… per DN25).
+        /// <summary>Famiglia per DN di ogni elemento, per chiave del registro (ball, butterfly, energy, zone, strainer, check).</summary>
+        public Dictionary<string, string> ManifoldFamilies { get; } =
+            ManifoldElements.All.ToDictionary(e => e.Key, e => string.Empty, StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Famiglia per DN salvata per l'elemento; vuota se mai impostata.</summary>
+        public string Family(string elementKey)
+        {
+            string value;
+            return ManifoldFamilies.TryGetValue(elementKey, out value) ? value ?? string.Empty : string.Empty;
+        }
+
+        // --- mix 2 vie (iniezione): lunghezze della catena ---
+        /// <summary>Tubo libero tra i pezzi della catena e attorno ai T (mm).</summary>
+        public double ManifoldMix2GapMm { get; set; } = 150;
+        /// <summary>Tubo tra pezzi flangiati consecutivi (mm); mai sotto i 50 mm di tubo diritto.</summary>
+        public double ManifoldMix2FlangedGapMm { get; set; } = 50;
+        /// <summary>Spazio riservato alla pompa sulla mandata (mm).</summary>
+        public double ManifoldMix2PumpSpaceMm { get; set; } = 400;
+        /// <summary>Tubo dopo l'intercettazione in cima alla catena (mm).</summary>
+        public double ManifoldMix2EndPipeMm { get; set; } = 100;
+        /// <summary>Rotazione degli accessori del mix 2 vie attorno all'asse del tubo (gradi).</summary>
+        public double ManifoldMix2RollDeg { get; set; } = 90;
+        /// <summary>Rotazione del filtro a Y attorno all'asse del tubo (gradi).</summary>
+        public double ManifoldStrainerRollDeg { get; set; } = 270;
+        /// <summary>Filtro a Y montato col verso invertito rispetto alla famiglia.</summary>
+        public bool ManifoldStrainerReversed { get; set; } = true;
 
         public static string FilePath
         {
@@ -86,6 +117,13 @@ namespace SayRevit.Addin
                 if (i <= 0) continue;
                 var k = line.Substring(0, i).Trim();
                 var v = line.Substring(i + 1).Trim();
+                // famiglie degli elementi: la chiave viene dal registro, non serve un case per elemento
+                var element = ManifoldElements.BySettingsKey(k);
+                if (element != null)
+                {
+                    s.ManifoldFamilies[element.Key] = v;
+                    continue;
+                }
             switch (k)
             {
                 case "ParserMode": s.ParserMode = v; break;
@@ -107,12 +145,17 @@ namespace SayRevit.Addin
                 case "ManifoldReturnOffsetMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var ro)) s.ManifoldReturnOffsetMm = ro; break;
                 case "ManifoldWithValves": s.ManifoldWithValves = v == "true"; break;
                 case "ManifoldBallValveMaxDnMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var bmax)) s.ManifoldBallValveMaxDnMm = bmax; break;
-                case "ManifoldBallValveFamily": s.ManifoldBallValveFamily = v; break;
-                case "ManifoldButterflyValveFamily": s.ManifoldButterflyValveFamily = v; break;
                 case "ManifoldValvePnBar": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var pn)) s.ManifoldValvePnBar = pn; break;
                 case "ManifoldValveDistanceMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var vd)) s.ManifoldValveDistanceMm = vd; break;
                 case "ManifoldButterflyRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var br)) s.ManifoldButterflyRollDeg = br; break;
                 case "ManifoldBallRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var sr)) s.ManifoldBallRollDeg = sr; break;
+                case "ManifoldMix2GapMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var g1)) s.ManifoldMix2GapMm = g1; break;
+                case "ManifoldMix2FlangedGapMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var g2)) s.ManifoldMix2FlangedGapMm = g2; break;
+                case "ManifoldMix2PumpSpaceMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var ps)) s.ManifoldMix2PumpSpaceMm = ps; break;
+                case "ManifoldMix2EndPipeMm": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var ep)) s.ManifoldMix2EndPipeMm = ep; break;
+                case "ManifoldMix2RollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var mr)) s.ManifoldMix2RollDeg = mr; break;
+                case "ManifoldStrainerRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var fr)) s.ManifoldStrainerRollDeg = fr; break;
+                case "ManifoldStrainerReversed": s.ManifoldStrainerReversed = v == "true"; break;
             }
             }
         }
@@ -143,13 +186,21 @@ namespace SayRevit.Addin
                     "ManifoldReturnOffsetMm=" + ManifoldReturnOffsetMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldWithValves=" + (ManifoldWithValves ? "true" : "false"),
                     "ManifoldBallValveMaxDnMm=" + ManifoldBallValveMaxDnMm.ToString(CultureInfo.InvariantCulture),
-                    "ManifoldBallValveFamily=" + (ManifoldBallValveFamily ?? string.Empty),
-                    "ManifoldButterflyValveFamily=" + (ManifoldButterflyValveFamily ?? string.Empty),
                     "ManifoldValvePnBar=" + ManifoldValvePnBar.ToString(CultureInfo.InvariantCulture),
                     "ManifoldValveDistanceMm=" + ManifoldValveDistanceMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldButterflyRollDeg=" + ManifoldButterflyRollDeg.ToString(CultureInfo.InvariantCulture),
-                    "ManifoldBallRollDeg=" + ManifoldBallRollDeg.ToString(CultureInfo.InvariantCulture)
+                    "ManifoldBallRollDeg=" + ManifoldBallRollDeg.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldMix2GapMm=" + ManifoldMix2GapMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldMix2FlangedGapMm=" + ManifoldMix2FlangedGapMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldMix2PumpSpaceMm=" + ManifoldMix2PumpSpaceMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldMix2EndPipeMm=" + ManifoldMix2EndPipeMm.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldMix2RollDeg=" + ManifoldMix2RollDeg.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldStrainerRollDeg=" + ManifoldStrainerRollDeg.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldStrainerReversed=" + (ManifoldStrainerReversed ? "true" : "false")
                 };
+                // una riga per elemento del registro (ManifoldBallValveFamily=…, ManifoldZoneValveFamily=…)
+                foreach (var element in ManifoldElements.All)
+                    lines.Add(element.SettingsKey + "=" + Family(element.Key));
                 File.WriteAllLines(FilePath, lines);
             }
             catch

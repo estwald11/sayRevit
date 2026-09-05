@@ -62,6 +62,13 @@ namespace SayRevit.Addin
                 var catalog = ModelCatalogReader.Read(doc);
                 var manifold = ManifoldPlanFactory.FromSettings(settings, catalog);
 
+                if (string.Equals(Value(request, "catalog", "no"), "yes", StringComparison.OrdinalIgnoreCase))
+                {
+                    var catalogPath = Path.Combine(Folder, "catalog.txt");
+                    File.WriteAllText(catalogPath, DescribeCatalog(doc));
+                    log.AppendLine("Catalogo scritto in " + catalogPath);
+                }
+
                 if (string.Equals(Value(request, "build", "yes"), "none", StringComparison.OrdinalIgnoreCase))
                 {
                     log.AppendLine("Solo pulizia: nessuna costruzione richiesta.");
@@ -110,7 +117,7 @@ namespace SayRevit.Addin
                 // 4) immagine della vista 3D
                 try
                 {
-                    var exported = ExportView(uidoc, report.CreatedIds, imagePath);
+                    var exported = ExportView(uidoc, report.CreatedIds, imagePath, ParseEye(Value(request, "view", null)));
                     log.AppendLine("Immagine: " + (exported ?? "non esportata"));
                 }
                 catch (Exception ex)
@@ -128,6 +135,106 @@ namespace SayRevit.Addin
                 try { File.WriteAllText(resultPath, log.ToString()); } catch { }
                 try { File.Delete(requestPath); } catch { }
             }
+        }
+
+        /// <summary>
+        /// Inventario del progetto per il banco di prova: famiglie di accessori e raccordi con i
+        /// loro tipi (e i connettori del primo tipo), tipi di tubazione con i raccordi delle
+        /// preferenze di instradamento. Serve a conoscere i nomi esatti prima di scriverli nel codice.
+        /// </summary>
+        private static string DescribeCatalog(Document doc)
+        {
+            var sb = new StringBuilder();
+            foreach (var cat in new[] { BuiltInCategory.OST_PipeAccessory, BuiltInCategory.OST_PipeFitting, BuiltInCategory.OST_MechanicalEquipment })
+            {
+                sb.AppendLine("== " + cat + " ==");
+                List<FamilySymbol> symbols;
+                try
+                {
+                    symbols = new FilteredElementCollector(doc).OfClass(typeof(FamilySymbol)).OfCategory(cat).Cast<FamilySymbol>().ToList();
+                }
+                catch
+                {
+                    continue;
+                }
+                foreach (var g in symbols.GroupBy(s => ModelCatalogReader.SafeFamilyName(s)).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    var family = g.First().Family;
+                    string partType = "?", placement = "?", wpb = "?";
+                    try { partType = ((PartType)family.get_Parameter(BuiltInParameter.FAMILY_CONTENT_PART_TYPE).AsInteger()).ToString(); } catch { }
+                    try { placement = family.FamilyPlacementType.ToString(); } catch { }
+                    try { wpb = family.get_Parameter(BuiltInParameter.FAMILY_WORK_PLANE_BASED).AsInteger() == 1 ? "sì" : "no"; } catch { }
+                    sb.AppendLine("FAMIGLIA \"" + g.Key + "\"  [tipo di parte " + partType + ", collocazione " + placement + ", piano di lavoro " + wpb + "]");
+                    var first = g.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).First();
+                    sb.Append("    tipo \"").Append(first.Name).Append("\"");
+                    try
+                    {
+                        var famDoc = doc.EditFamily(first.Family);
+                        try
+                        {
+                            var conns = new FilteredElementCollector(famDoc).OfClass(typeof(ConnectorElement)).Cast<ConnectorElement>().ToList();
+                            sb.Append("  connettori ").Append(conns.Count).Append(":");
+                            foreach (var c in conns)
+                            {
+                                sb.Append(" [").Append(c.Domain).Append(" ").Append(c.SystemClassification).Append(" a ")
+                                  .Append(VecMm(c.Origin)).Append(" verso ").Append(VecDir(c.CoordinateSystem.BasisZ)).Append("]");
+                            }
+                        }
+                        finally
+                        {
+                            famDoc.Close(false);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        sb.Append("  (connettori non leggibili: ").Append(ex.Message).Append(")");
+                    }
+                    sb.AppendLine();
+                    if (g.Count() > 1)
+                        sb.AppendLine("    altri tipi: " + string.Join(" | ", g.OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).Skip(1).Select(s => s.Name)));
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("== Tipi di tubazione ==");
+            foreach (var pt in new FilteredElementCollector(doc).OfClass(typeof(Autodesk.Revit.DB.Plumbing.PipeType)).Cast<Autodesk.Revit.DB.Plumbing.PipeType>().OrderBy(t => t.Name))
+            {
+                sb.AppendLine("TIPO \"" + pt.Name + "\"");
+                try
+                {
+                    var rpm = pt.RoutingPreferenceManager;
+                    foreach (RoutingPreferenceRuleGroupType grp in Enum.GetValues(typeof(RoutingPreferenceRuleGroupType)))
+                    {
+                        int n;
+                        try { n = rpm.GetNumberOfRules(grp); } catch { continue; }
+                        if (n == 0) continue;
+                        sb.Append("    ").Append(grp).Append(": ");
+                        for (var i = 0; i < n; i++)
+                        {
+                            var rule = rpm.GetRule(grp, i);
+                            var part = rule == null ? null : doc.GetElement(rule.MEPPartId);
+                            var fs = part as FamilySymbol;
+                            sb.Append(i > 0 ? " | " : "").Append(fs != null ? ModelCatalogReader.SafeFamilyName(fs) + " : " + fs.Name : part == null ? "(nessuno)" : part.Name);
+                        }
+                        sb.AppendLine();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    sb.AppendLine("    preferenze non leggibili: " + ex.Message);
+                }
+            }
+            return sb.ToString();
+        }
+
+        private static string VecMm(XYZ v)
+        {
+            return "(" + Math.Round(SayRevit.Addin.Revit.Units.FtToMm(v.X)) + "; " + Math.Round(SayRevit.Addin.Revit.Units.FtToMm(v.Y)) + "; " + Math.Round(SayRevit.Addin.Revit.Units.FtToMm(v.Z)) + ")";
+        }
+
+        private static string VecDir(XYZ v)
+        {
+            return "(" + Math.Round(v.X, 2) + "; " + Math.Round(v.Y, 2) + "; " + Math.Round(v.Z, 2) + ")";
         }
 
         private static Dictionary<string, string> ReadRequest(string path)
@@ -209,7 +316,22 @@ namespace SayRevit.Addin
         /// Esporta un'immagine da una vista 3D dedicata ("sayRevit banco"): riquadro di sezione
         /// attorno agli elementi creati, ombreggiata, senza livelli e griglie, inquadrata a pagina.
         /// </summary>
-        private static string ExportView(UIDocument uidoc, ICollection<ElementId> created, string imagePath)
+        /// <summary>"view=x,y,z": da dove guarda la camera (direzione verso l'osservatore); null = predefinita.</summary>
+        private static XYZ ParseEye(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return null;
+            var parts = text.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+            double x, y, z;
+            if (parts.Length != 3 ||
+                !double.TryParse(parts[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out x) ||
+                !double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out y) ||
+                !double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out z))
+                return null;
+            var v = new XYZ(x, y, z);
+            return v.GetLength() < 1e-6 ? null : v.Normalize();
+        }
+
+        private static string ExportView(UIDocument uidoc, ICollection<ElementId> created, string imagePath, XYZ eyeOverride = null)
         {
             var doc = uidoc.Document;
             const string name = "sayRevit banco";
@@ -257,7 +379,7 @@ namespace SayRevit.Addin
                 // vista da sud-ovest, dall'alto: collettori lungo X visti di tre quarti
                 try
                 {
-                    var eye = new XYZ(-1, -1.2, 0.9).Normalize();
+                    var eye = eyeOverride ?? new XYZ(-1, -1.2, 0.9).Normalize();
                     var up = new XYZ(0, 0, 1);
                     var forward = eye.Negate();
                     var right = forward.CrossProduct(up).Normalize();

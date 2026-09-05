@@ -39,7 +39,11 @@ namespace SayRevit.Core.Model
         /// <summary>Valvola di regolazione a 2 vie.</summary>
         TwoWayValve,
         /// <summary>Bypass tra mandata e ritorno.</summary>
-        Bypass
+        Bypass,
+        /// <summary>Filtro a Y.</summary>
+        Strainer,
+        /// <summary>Valvola di zona (farfalla wafer con riduttore manuale).</summary>
+        ZoneValve
     }
 
     /// <summary>Descrizione di una tipologia: codice per le impostazioni, etichette e componenti.</summary>
@@ -93,8 +97,8 @@ namespace SayRevit.Core.Model
         {
             get
             {
-                return SupplyComponents.Contains(CircuitComponent.ThreeWayMixingValve) ||
-                       SupplyComponents.Contains(CircuitComponent.TwoWayValve);
+                return SupplyComponents.Concat(ReturnComponents).Any(c =>
+                    c == CircuitComponent.ThreeWayMixingValve || c == CircuitComponent.TwoWayValve);
             }
         }
 
@@ -102,6 +106,16 @@ namespace SayRevit.Core.Model
         public bool HasBypass
         {
             get { return SupplyComponents.Contains(CircuitComponent.Bypass); }
+        }
+
+        /// <summary>
+        /// True se la catena completa dei pezzi (oltre all'intercettazione) viene modellata in Revit:
+        /// oggi il mix 2 vie a iniezione. Per le altre tipologie con pompa o miscelazione i
+        /// componenti restano dichiarati in anteprima.
+        /// </summary>
+        public bool IsChainModelled
+        {
+            get { return Kind == CircuitKind.MixTwoWayInjection; }
         }
 
         public override string ToString()
@@ -140,9 +154,11 @@ namespace SayRevit.Core.Model
                 Kind = CircuitKind.MixTwoWayInjection,
                 Code = "mix2",
                 Label = "Mix 2 vie (iniezione)",
-                Description = "Circuito a iniezione: valvola a 2 vie sulla mandata primaria, bypass tra mandata e ritorno, pompa sul secondario.",
-                SupplyComponents = new[] { CircuitComponent.ShutoffValve, CircuitComponent.TwoWayValve, CircuitComponent.Bypass, CircuitComponent.Pump },
-                ReturnComponents = new[] { CircuitComponent.ShutoffValve, CircuitComponent.Bypass }
+                Description = "Circuito a iniezione: sulla mandata intercettazione, T del bypass, spazio per la pompa, valvola di zona e " +
+                              "intercettazione; sul ritorno intercettazione, valvola a 2 vie (energy valve), T del bypass, filtro a Y, " +
+                              "valvola di zona e intercettazione. Il bypass unisce i due T con una valvola di ritegno.",
+                SupplyComponents = new[] { CircuitComponent.ShutoffValve, CircuitComponent.Bypass, CircuitComponent.Pump, CircuitComponent.ZoneValve, CircuitComponent.ShutoffValve },
+                ReturnComponents = new[] { CircuitComponent.ShutoffValve, CircuitComponent.TwoWayValve, CircuitComponent.Bypass, CircuitComponent.Strainer, CircuitComponent.ZoneValve, CircuitComponent.ShutoffValve }
             },
             new CircuitKindInfo
             {
@@ -245,6 +261,8 @@ namespace SayRevit.Core.Model
                 case CircuitComponent.ThreeWayMixingValve: return "valvola miscelatrice 3 vie";
                 case CircuitComponent.TwoWayValve: return "valvola 2 vie";
                 case CircuitComponent.Bypass: return "bypass mandata/ritorno";
+                case CircuitComponent.Strainer: return "filtro a Y";
+                case CircuitComponent.ZoneValve: return "valvola di zona";
                 default: return c.ToString();
             }
         }
@@ -255,6 +273,13 @@ namespace SayRevit.Core.Model
             var info = Info(kind);
             var chain = string.Join(" → ", info.SupplyComponents.Select(ComponentLabel));
             return info.IsBlind ? chain + " (fine alla flangia)" : chain;
+        }
+
+        /// <summary>Catena dei componenti di ritorno in una riga.</summary>
+        public static string ReturnChain(CircuitKind kind)
+        {
+            var info = Info(kind);
+            return string.Join(" → ", info.ReturnComponents.Select(ComponentLabel));
         }
     }
 }

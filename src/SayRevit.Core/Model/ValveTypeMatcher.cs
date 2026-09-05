@@ -7,14 +7,22 @@ using SayRevit.Core.Parsing;
 
 namespace SayRevit.Core.Model
 {
-    /// <summary>Tipo di valvola previsto su uno stacco.</summary>
+    /// <summary>Tipo di pezzo in linea previsto su uno stacco (valvole e accessori).</summary>
     public enum ValveKind
     {
         None,
         /// <summary>Valvola a sfera: usata fino al DN di soglia.</summary>
         Ball,
         /// <summary>Valvola a farfalla (boax): usata oltre il DN di soglia.</summary>
-        Butterfly
+        Butterfly,
+        /// <summary>Valvola di regolazione a 2 vie (Belimo Energy Valve), una famiglia per DN.</summary>
+        EnergyValve,
+        /// <summary>Valvola di zona: farfalla wafer con riduttore manuale (Watts), tra due flange.</summary>
+        ZoneValve,
+        /// <summary>Filtro a Y flangiato.</summary>
+        Strainer,
+        /// <summary>Valvola di ritegno wafer sul bypass, tra due flange.</summary>
+        CheckValve
     }
 
     /// <summary>Tipo di famiglia scelto per una valvola, con quello che si ricava dal suo nome.</summary>
@@ -140,7 +148,18 @@ namespace SayRevit.Core.Model
         /// </summary>
         public static ValveTypePick Pick(IEnumerable<string> typeNames, double dnMm, double preferredPnBar)
         {
+            return Pick(typeNames, dnMm, preferredPnBar, null);
+        }
+
+        /// <summary>
+        /// Come <see cref="Pick(IEnumerable{string}, double, double)"/>, ma a parità di DN vince
+        /// prima il tipo il cui nome contiene <paramref name="preferredWord"/> (es. "ductile" tra
+        /// "DN50 - Cast Iron" e "DN50 - Ductile Iron"), poi il PN richiesto.
+        /// </summary>
+        public static ValveTypePick Pick(IEnumerable<string> typeNames, double dnMm, double preferredPnBar, string preferredWord)
+        {
             if (typeNames == null || dnMm <= 0) return null;
+            var word = string.IsNullOrWhiteSpace(preferredWord) ? null : TextUtil.Fold(preferredWord);
 
             var parsed = typeNames
                 .Where(n => !string.IsNullOrWhiteSpace(n))
@@ -163,7 +182,8 @@ namespace SayRevit.Core.Model
             }
 
             var pick = pool
-                .OrderBy(p => PnDistance(p, preferredPnBar))
+                .OrderBy(p => word != null && TextUtil.Fold(p.TypeName).Contains(word) ? 0 : 1)
+                .ThenBy(p => PnDistance(p, preferredPnBar))
                 .ThenBy(p => p.PnBar)
                 .ThenBy(p => p.TypeName, StringComparer.OrdinalIgnoreCase)
                 .First();

@@ -57,7 +57,16 @@ namespace SayRevit.Core.Tests
             Assert.True(mix2.HasPump);
             Assert.True(mix2.HasMixing);
             Assert.True(mix2.HasBypass);
-            Assert.Contains(CircuitComponent.TwoWayValve, mix2.SupplyComponents);
+            Assert.True(mix2.IsChainModelled);
+            // la valvola a 2 vie sta sul RITORNO (a valle del filtro), la pompa sulla mandata
+            Assert.Contains(CircuitComponent.TwoWayValve, mix2.ReturnComponents);
+            Assert.DoesNotContain(CircuitComponent.TwoWayValve, mix2.SupplyComponents);
+            Assert.Contains(CircuitComponent.Strainer, mix2.ReturnComponents);
+            Assert.Contains(CircuitComponent.ZoneValve, mix2.SupplyComponents);
+            Assert.Contains(CircuitComponent.ZoneValve, mix2.ReturnComponents);
+            Assert.Equal(CircuitComponent.ShutoffValve, mix2.SupplyComponents.Last());
+            Assert.Equal(CircuitComponent.ShutoffValve, mix2.ReturnComponents.Last());
+            Assert.Contains("filtro a Y", CircuitKinds.ReturnChain(CircuitKind.MixTwoWayInjection));
 
             var noPump = CircuitKinds.Info(CircuitKind.NoPump);
             Assert.False(noPump.HasPump);
@@ -153,7 +162,7 @@ namespace SayRevit.Core.Tests
         {
             var p = Plan(new ManifoldCircuit(20, CircuitKind.MixThreeWay), new ManifoldCircuit(16, CircuitKind.NoPump));
             var summary = p.Summary();
-            Assert.Contains("C1: DN20 mix 3 vie", summary);
+            Assert.Contains("C1: DN20 prima del bypass → DN20 dopo il bypass mix 3 vie", summary);
             Assert.Contains("C2: DN16 senza pompa", summary);
         }
 
@@ -316,8 +325,8 @@ namespace SayRevit.Core.Tests
         [Fact]
         public void AltreTipologie_UsanoLaLunghezzaGenerica()
         {
-            var p = PlanWithValves(new ManifoldCircuit(25, CircuitKind.Direct), new ManifoldCircuit(25, CircuitKind.MixThreeWay),
-                new ManifoldCircuit(25, CircuitKind.MixTwoWayInjection));
+            // il mix 2 vie non è qui: ha la catena, e la sua fine la fissa il tubo dopo l'ultimo pezzo
+            var p = PlanWithValves(new ManifoldCircuit(25, CircuitKind.Direct), new ManifoldCircuit(25, CircuitKind.MixThreeWay));
             p.CircuitLengthMm = 700;
             var run = p.ToParseResult().Plan.Runs[0];
             Assert.All(run.Branches, b =>

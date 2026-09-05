@@ -7,9 +7,14 @@ namespace SayRevit.Addin
     /// <summary>
     /// Costruisce il collettore dalle impostazioni salvate e dal catalogo del progetto, senza
     /// passare dalla finestra: è lo stesso piano che produce il pannello, usato dall'automazione.
+    /// Le famiglie degli elementi vengono dal registro <see cref="ManifoldElements"/>: nessun
+    /// codice per elemento qui.
     /// </summary>
     public static class ManifoldPlanFactory
     {
+        /// <summary>Voce salvata che significa "nessuna famiglia" (la stessa del pannello).</summary>
+        public const string NoFamily = "(nessuna)";
+
         public static ManifoldPlan FromSettings(Settings settings, ModelCatalog catalog)
         {
             DirectionKind direction;
@@ -28,15 +33,26 @@ namespace SayRevit.Addin
                 ReturnOffsetMm = settings.ManifoldReturnOffsetMm,
                 WithValves = settings.ManifoldWithValves,
                 BallValveMaxDnMm = settings.ManifoldBallValveMaxDnMm,
-                BallValveFamily = FamilyOrNull(settings.ManifoldBallValveFamily, catalog),
-                ButterflyValveFamily = FamilyOrNull(settings.ManifoldButterflyValveFamily, catalog),
                 ValvePnBar = settings.ManifoldValvePnBar,
                 ValveDistanceMm = settings.ManifoldValveDistanceMm,
                 ButterflyRollDegrees = settings.ManifoldButterflyRollDeg,
-                BallRollDegrees = settings.ManifoldBallRollDeg
+                BallRollDegrees = settings.ManifoldBallRollDeg,
+                Mix2GapMm = settings.ManifoldMix2GapMm,
+                Mix2FlangedGapMm = settings.ManifoldMix2FlangedGapMm,
+                Mix2PumpSpaceMm = settings.ManifoldMix2PumpSpaceMm,
+                Mix2EndPipeMm = settings.ManifoldMix2EndPipeMm,
+                Mix2RollDegrees = settings.ManifoldMix2RollDeg,
+                StrainerRollDegrees = settings.ManifoldStrainerRollDeg,
+                StrainerReversed = settings.ManifoldStrainerReversed
             };
-            plan.BallValveTypes.AddRange(TypesOf(plan.BallValveFamily, catalog));
-            plan.ButterflyValveTypes.AddRange(TypesOf(plan.ButterflyValveFamily, catalog));
+            // famiglie per DN di ogni elemento: base + soglie; valgono solo le famiglie caricate in QUESTO progetto
+            foreach (var element in ManifoldElements.All)
+            {
+                var map = plan.FamilyMaps[element.Key];
+                LoadMap(map, settings.Family(element.Key), catalog);
+                plan.ElementTypes[element.Key].AddRange(TypesOf(map.Default, catalog));
+            }
+            plan.AccessoryFamilies.AddRange(catalog.PipeAccessories);
 
             var type = catalog.PipeTypes.FirstOrDefault(t => t.Name == plan.PipeTypeName) ?? catalog.PipeTypes.FirstOrDefault();
             if (type != null)
@@ -49,10 +65,33 @@ namespace SayRevit.Addin
             return plan;
         }
 
+        /// <summary>
+        /// Legge una famiglia per DN salvata dentro la mappa del piano: la base e le soglie con una
+        /// famiglia caricata nel progetto; "(nessuna)" resta una scelta esplicita di non mettere il
+        /// pezzo; una soglia con famiglia non caricata viene ignorata (vale la base).
+        /// </summary>
+        private static void LoadMap(FamilyByDn target, string stored, ModelCatalog catalog)
+        {
+            var parsed = FamilyByDn.Parse(stored);
+            target.Default = FamilyOrNull(parsed.Default, catalog);
+            target.Rules.Clear();
+            foreach (var rule in parsed.OrderedRules())
+            {
+                var family = FamilyOrNull(rule.Family, catalog);
+                if (family == null && rule.HasFamily && !IsNone(rule.Family)) continue;
+                target.Rules.Add(new FamilyRule(rule.FromDnMm, family));
+            }
+        }
+
+        private static bool IsNone(string name)
+        {
+            return string.Equals((name ?? string.Empty).Trim(), NoFamily, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string FamilyOrNull(string name, ModelCatalog catalog)
         {
-            if (string.IsNullOrWhiteSpace(name)) return null;
-            var found = catalog.PipeAccessories.FirstOrDefault(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(name) || IsNone(name)) return null;
+            var found = catalog.PipeAccessories.FirstOrDefault(f => string.Equals(f.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
             return found == null ? null : found.Name;
         }
 

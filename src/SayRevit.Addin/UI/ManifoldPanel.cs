@@ -35,10 +35,6 @@ namespace SayRevit.Addin.UI
         /// <summary>Rotazioni offerte per la boax attorno all'asse del tubo.</summary>
         private static readonly string[] RollAngles = { "0", "90", "180", "270" };
 
-        /// <summary>Parole cercate nel nome della famiglia per proporla come valvola a sfera / boax.</summary>
-        private static readonly string[] BallHints = { "sfera", "ball" };
-        private static readonly string[] ButterflyHints = { "boax", "farfalla", "butterfly", "wafer" };
-
         private readonly ModelCatalog _catalog;
         private readonly ComboBox _pipeType = new ComboBox();
         private readonly TextBlock _typeInfo = new TextBlock();
@@ -63,13 +59,25 @@ namespace SayRevit.Addin.UI
 
         private readonly CheckBox _withValves = new CheckBox();
         private readonly TextBox _ballMaxDn = new TextBox();
-        private readonly ComboBox _ballFamily = new ComboBox();
-        private readonly ComboBox _butterflyFamily = new ComboBox();
         private readonly ComboBox _valvePn = new ComboBox();
         private readonly TextBox _valveDistance = new TextBox();
         private readonly ComboBox _butterflyRoll = new ComboBox();
         private readonly ComboBox _ballRoll = new ComboBox();
         private readonly ComboBox _startMode = new ComboBox();
+
+        /// <summary>
+        /// Scelta della famiglia (tendina + "per DN…") di ogni elemento del registro
+        /// <see cref="ManifoldElements"/>, per chiave: il pannello non elenca gli elementi uno a uno.
+        /// </summary>
+        private readonly Dictionary<string, FamilyPicker> _pickers = new Dictionary<string, FamilyPicker>(StringComparer.OrdinalIgnoreCase);
+        private readonly TextBox _mix2Gap = new TextBox();
+        private readonly TextBox _mix2FlangedGap = new TextBox();
+        private readonly TextBox _mix2PumpSpace = new TextBox();
+        private readonly TextBox _mix2EndPipe = new TextBox();
+        private readonly ComboBox _mix2Roll = new ComboBox();
+        private readonly ComboBox _strainerRoll = new ComboBox();
+        private readonly CheckBox _strainerReversed = new CheckBox();
+        private readonly TextBlock _energyValveInfo = new TextBlock();
 
         private bool _suspendChanged;
 
@@ -100,7 +108,99 @@ namespace SayRevit.Addin.UI
             more.Children.Add(BuildParameters());
             more.Children.Add(BuildStartPoint());
             more.Children.Add(BuildValves());
+            more.Children.Add(BuildMixTwoWay());
             MoreSection = more;
+        }
+
+        // ------------------------------------------------------- mix 2 vie (iniezione)
+
+        /// <summary>
+        /// Accessori della catena del mix 2 vie: le famiglie si scelgono qui (proposte per nome);
+        /// la energy valve non si sceglie perché è una famiglia per DN, riconosciuta dal nome
+        /// ("ev025r2…" per DN25): si mostra solo per quali DN esiste nel progetto.
+        /// </summary>
+        private UIElement BuildMixTwoWay()
+        {
+            var section = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            section.Children.Add(new TextBlock
+            {
+                Text = "Mix 2 vie (iniezione)",
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 2, 0, 4),
+                ToolTip = "Mandata: intercettazione → T bypass → spazio pompa → valvola di zona → intercettazione.\n" +
+                          "Ritorno: intercettazione → energy valve → T bypass → filtro a Y → valvola di zona → intercettazione.\n" +
+                          "Bypass: dal T di mandata di traverso fino alla base del ritorno, tratto verticale con ritegno, poi lungo la base fino al T di ritorno."
+            });
+
+            var panel = new WrapPanel();
+
+            // gli accessori della catena: una scelta di famiglia per ogni elemento del registro
+            // (energy valve: di base automatica sul nome; la riga del circuito vince comunque)
+            foreach (var element in ManifoldElements.In(ElementSection.MixTwoWay))
+            {
+                var picker = AddPicker(element);
+                panel.Children.Add(picker.View);
+                picker.Changed += (s, e) => Notify();
+            }
+            var evPlan = new ManifoldPlan();
+            evPlan.AccessoryFamilies.AddRange(_catalog.PipeAccessories);
+
+            panel.Children.Add(Labeled("Tubo tra i pezzi (mm):", _mix2Gap, 60));
+            _mix2Gap.Text = "150";
+            _mix2Gap.ToolTip = "Tubo libero tra due pezzi consecutivi della catena e prima/dopo il T del bypass (minimo 50 mm).";
+
+            panel.Children.Add(Labeled("Tra pezzi flangiati (mm):", _mix2FlangedGap, 60));
+            _mix2FlangedGap.Text = "50";
+            _mix2FlangedGap.ToolTip = "Tubo tra filtro, valvola di zona e intercettazione in cima. Tra due elementi restano sempre almeno 50 mm di tubo diritto.";
+
+            panel.Children.Add(Labeled("Spazio pompa (mm):", _mix2PumpSpace, 60));
+            _mix2PumpSpace.Text = "400";
+            _mix2PumpSpace.ToolTip = "Tratto di tubo lasciato libero sulla mandata per la pompa (famiglia non ancora disponibile).";
+
+            panel.Children.Add(Labeled("Tubo finale (mm):", _mix2EndPipe, 60));
+            _mix2EndPipe.Text = "100";
+            _mix2EndPipe.ToolTip = "Tubo dopo l'intercettazione in cima alla catena, su mandata e ritorno.";
+
+            foreach (var a in RollAngles) _mix2Roll.Items.Add(a + "°");
+            _mix2Roll.SelectedItem = "90°";
+            panel.Children.Add(Labeled("Rotazione accessori:", _mix2Roll, 70));
+            _mix2Roll.ToolTip = "Rotazione di energy valve, valvola di zona e ritegno attorno all'asse del tubo (stessa convenzione della boax).";
+
+            foreach (var a in RollAngles) _strainerRoll.Items.Add(a + "°");
+            _strainerRoll.SelectedItem = "270°";
+            panel.Children.Add(Labeled("Rotazione filtro a Y:", _strainerRoll, 70));
+            _strainerRoll.ToolTip = "Rotazione del filtro a Y attorno all'asse del tubo, stessa convenzione della boax.";
+
+            _strainerReversed.Content = "Filtro a Y capovolto";
+            _strainerReversed.IsChecked = true;
+            _strainerReversed.VerticalAlignment = VerticalAlignment.Center;
+            _strainerReversed.Margin = new Thickness(0, 0, 12, 6);
+            _strainerReversed.ToolTip = "Monta il filtro col verso invertito rispetto alla famiglia (girato di 180° attorno alla normale al tubo):\n" +
+                                        "la Y guarda verso il collettore. Togli la spunta se esce a rovescio.";
+            panel.Children.Add(_strainerReversed);
+
+            section.Children.Add(panel);
+
+            _energyValveInfo.Foreground = Brushes.Gray;
+            _energyValveInfo.TextWrapping = TextWrapping.Wrap;
+            _energyValveInfo.Margin = new Thickness(0, 0, 0, 4);
+            var evDns = evPlan.EnergyValveDns();
+            _energyValveInfo.Text = evDns.Count == 0
+                ? "Energy valve (Belimo, una famiglia per DN): nessuna famiglia \"ev…\" nel progetto; con \"" + AutoEnergyValve +
+                  "\" il ritorno resterà senza valvola a 2 vie, scegli una famiglia sopra."
+                : "Energy valve automatica (Belimo, una famiglia per DN, scelta dal nome): disponibile per DN " +
+                  string.Join(", ", evDns.Select(MepSize.Fmt)) + ".";
+            section.Children.Add(_energyValveInfo);
+
+            _mix2Gap.TextChanged += (s, e) => Notify();
+            _mix2FlangedGap.TextChanged += (s, e) => Notify();
+            _mix2PumpSpace.TextChanged += (s, e) => Notify();
+            _mix2EndPipe.TextChanged += (s, e) => Notify();
+            _mix2Roll.SelectionChanged += (s, e) => Notify();
+            _strainerRoll.SelectionChanged += (s, e) => Notify();
+            _strainerReversed.Checked += (s, e) => Notify();
+            _strainerReversed.Unchecked += (s, e) => Notify();
+            return section;
         }
 
         /// <summary>Punto di partenza: "origin" (origine del progetto, predefinito) o "pick" (scelto nel modello dopo Crea).</summary>
@@ -364,13 +464,13 @@ namespace SayRevit.Addin.UI
             _ballMaxDn.ToolTip = "Fino a questo DN compreso si usa la valvola a sfera; oltre si usa la boax.\n" +
                                  "Predefinito 32: sfera fino a DN32, boax da DN40 in su.";
 
-            FillFamilies(_ballFamily, BallHints);
-            panel.Children.Add(Labeled("Famiglia sfera:", _ballFamily, 190));
-            _ballFamily.ToolTip = "Famiglia di valvole a sfera caricata nel progetto (accessori per tubazioni).";
-
-            FillFamilies(_butterflyFamily, ButterflyHints);
-            panel.Children.Add(Labeled("Famiglia boax:", _butterflyFamily, 190));
-            _butterflyFamily.ToolTip = "Famiglia di valvole boax caricata nel progetto (accessori per tubazioni).";
+            // intercettazioni: una scelta di famiglia per ogni elemento del registro (sfera, boax)
+            foreach (var element in ManifoldElements.In(ElementSection.Shutoff))
+            {
+                var picker = AddPicker(element);
+                panel.Children.Add(picker.View);
+                picker.Changed += (s, e) => { FillPressureClasses(); Notify(); };
+            }
 
             panel.Children.Add(Labeled("PN:", _valvePn, 110));
             _valvePn.ToolTip = "Pressione nominale preferita quando i nomi dei tipi la dichiarano (es. DN40_PN16).";
@@ -395,8 +495,6 @@ namespace SayRevit.Addin.UI
             _valveDistance.TextChanged += (s, e) => Notify();
             _butterflyRoll.SelectionChanged += (s, e) => Notify();
             _ballRoll.SelectionChanged += (s, e) => Notify();
-            _ballFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
-            _butterflyFamily.SelectionChanged += (s, e) => { FillPressureClasses(); Notify(); };
             _valvePn.SelectionChanged += (s, e) => Notify();
 
             section.Children.Add(panel);
@@ -412,27 +510,12 @@ namespace SayRevit.Addin.UI
             return section;
         }
 
-        /// <summary>Riempie una tendina con le famiglie di accessori, proponendo quella suggerita dal nome.</summary>
-        private void FillFamilies(ComboBox combo, string[] hints)
-        {
-            combo.Items.Add(NoFamily);
-            foreach (var f in _catalog.PipeAccessories) combo.Items.Add(f.Name);
-            combo.SelectedIndex = 0;
-
-            foreach (var f in _catalog.PipeAccessories)
-            {
-                var name = TextUtil.Fold(f.Name);
-                if (!hints.Any(h => name.Contains(h))) continue;
-                combo.SelectedItem = f.Name;
-                break;
-            }
-        }
-
         /// <summary>PN offerti: quelli dichiarati nei nomi dei tipi delle famiglie scelte.</summary>
         private void FillPressureClasses()
         {
             var previous = _valvePn.SelectedItem as string;
-            var names = FamilyTypes(_ballFamily).Concat(FamilyTypes(_butterflyFamily));
+            // i PN dichiarati dai tipi di tutte le famiglie di intercettazione in gioco: base e soglie per DN
+            var names = ShutoffPickers().SelectMany(p => p.AllTypes()).ToList();
             var available = ValveTypeMatcher.AvailablePn(names);
 
             var suspended = _suspendChanged;
@@ -453,20 +536,18 @@ namespace SayRevit.Addin.UI
             }
         }
 
-        /// <summary>Nomi dei tipi della famiglia scelta nella tendina; vuoto con "(nessuna)".</summary>
-        private List<string> FamilyTypes(ComboBox combo)
+        /// <summary>Crea e registra la scelta di famiglia di un elemento del registro.</summary>
+        private FamilyPicker AddPicker(ManifoldElement element)
         {
-            var name = SelectedFamily(combo);
-            if (name == null) return new List<string>();
-            var family = _catalog.PipeAccessories.FirstOrDefault(f => f.Name == name);
-            return family == null ? new List<string>() : family.TypeNames;
+            var picker = new FamilyPicker(element, _catalog, NoFamily, AutoEnergyValve);
+            _pickers[element.Key] = picker;
+            return picker;
         }
 
-        /// <summary>Famiglia scelta nella tendina; null con "(nessuna)".</summary>
-        private static string SelectedFamily(ComboBox combo)
+        /// <summary>Le scelte delle intercettazioni (sezione "Valvole sugli stacchi"), già create.</summary>
+        private IEnumerable<FamilyPicker> ShutoffPickers()
         {
-            var name = combo.SelectedItem as string;
-            return string.IsNullOrWhiteSpace(name) || name == NoFamily ? null : name;
+            return ManifoldElements.In(ElementSection.Shutoff).Where(e => _pickers.ContainsKey(e.Key)).Select(e => _pickers[e.Key]);
         }
 
         private void UpdateValvesEnabled()
@@ -475,8 +556,7 @@ namespace SayRevit.Addin.UI
             _ballMaxDn.IsEnabled = on;
             _butterflyRoll.IsEnabled = on;
             _ballRoll.IsEnabled = on;
-            _ballFamily.IsEnabled = on;
-            _butterflyFamily.IsEnabled = on;
+            foreach (var picker in ShutoffPickers()) picker.IsEnabled = on;
             _valveDistance.IsEnabled = on;
             _valvePn.IsEnabled = on && _valvePn.Items.Count > 1;
         }
@@ -497,7 +577,17 @@ namespace SayRevit.Addin.UI
         {
             public FrameworkElement Container;
             public TextBox Dn;
+            /// <summary>"DN", oppure "DN prima del bypass" per le tipologie con bypass.</summary>
+            public TextBlock DnLabel;
             public ComboBox Kind;
+            /// <summary>DN dopo il bypass (solo tipologie con bypass); vuoto = come il DN.</summary>
+            public TextBox DnAfter;
+            public FrameworkElement DnAfterBox;
+            /// <summary>Energy valve del circuito (solo mix 2 vie); prima voce = automatica sul DN.</summary>
+            public ComboBox EnergyValve;
+            public FrameworkElement EnergyValveBox;
+            /// <summary>Valvola di zona: accessorio opzionale, per ogni tipologia.</summary>
+            public CheckBox ZoneValve;
 
             /// <summary>Tipologia scelta nella tendina; diretto se la selezione manca.</summary>
             public CircuitKind SelectedKind
@@ -508,17 +598,43 @@ namespace SayRevit.Addin.UI
                     return i >= 0 && i < CircuitKinds.All.Count ? CircuitKinds.All[i].Kind : CircuitKinds.Default;
                 }
             }
+
+            /// <summary>Famiglia della energy valve scelta; null = automatica.</summary>
+            public string SelectedEnergyValve
+            {
+                get
+                {
+                    var name = EnergyValve == null ? null : EnergyValve.SelectedItem as string;
+                    return string.IsNullOrWhiteSpace(name) || name == AutoEnergyValve ? null : name;
+                }
+            }
+
+            /// <summary>Mostra i campi che hanno senso per la tipologia scelta.</summary>
+            public void UpdateVisibility()
+            {
+                var info = CircuitKinds.Info(SelectedKind);
+                if (DnLabel != null) DnLabel.Text = info.HasBypass ? "DN prima del bypass" : "DN";
+                if (DnAfterBox != null) DnAfterBox.Visibility = info.HasBypass ? Visibility.Visible : Visibility.Collapsed;
+                if (EnergyValveBox != null) EnergyValveBox.Visibility = info.IsChainModelled ? Visibility.Visible : Visibility.Collapsed;
+                // il cieco si ferma alla flangia: niente valvola di zona da scegliere
+                if (ZoneValve != null) ZoneValve.Visibility = info.IsBlind ? Visibility.Collapsed : Visibility.Visible;
+            }
         }
+
+        /// <summary>Voce della tendina della energy valve che significa "scelta automatica sul DN".</summary>
+        private const string AutoEnergyValve = "(automatica sul DN)";
 
         /// <summary>Aggiunge una riga circuito; <paramref name="dnMm"/> a 0 lascia il campo vuoto.</summary>
         private void AddCircuit(double dnMm, bool focus)
         {
-            AddCircuit(dnMm, CircuitKinds.Default, focus);
+            AddCircuit(new ManifoldCircuit(dnMm, CircuitKinds.Default), focus);
         }
 
-        /// <summary>Aggiunge una riga circuito con DN e tipologia (diretto, mix 3 vie, mix 2 vie, senza pompa).</summary>
-        private void AddCircuit(double dnMm, CircuitKind kind, bool focus)
+        /// <summary>Aggiunge una riga circuito con DN, tipologia, DN dopo il bypass e energy valve.</summary>
+        private void AddCircuit(ManifoldCircuit circuit, bool focus)
         {
+            var dnMm = circuit.DnMm;
+            var kind = circuit.Kind;
             var row = new CircuitRow();
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 2) };
 
@@ -530,7 +646,8 @@ namespace SayRevit.Addin.UI
             };
             panel.Children.Add(label);
 
-            panel.Children.Add(new TextBlock { Text = "DN", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            row.DnLabel = new TextBlock { Text = "DN", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) };
+            panel.Children.Add(row.DnLabel);
 
             row.Dn = new TextBox
             {
@@ -567,8 +684,57 @@ namespace SayRevit.Addin.UI
             row.Kind.SelectedIndex = kindIndex;
             row.Kind.ToolTip = "Tipologia del circuito:\n" +
                                string.Join("\n", CircuitKinds.All.Select(k => "• " + k.Label + ": " + CircuitKinds.SupplyChain(k.Kind)));
-            row.Kind.SelectionChanged += (s, e) => Notify();
+            row.Kind.SelectionChanged += (s, e) => { row.UpdateVisibility(); Notify(); };
             panel.Children.Add(row.Kind);
+
+            // DN dopo il bypass (mix 2 vie e mix 3 vie): il secondario verso l'utenza, e il bypass
+            var dnAfterPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+            dnAfterPanel.Children.Add(new TextBlock { Text = "DN dopo il bypass", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+            row.DnAfter = new TextBox
+            {
+                Width = 50,
+                VerticalAlignment = VerticalAlignment.Center,
+                Text = circuit.DnAfterBypassMm > 0 ? circuit.DnAfterBypassMm.ToString("0.##", CultureInfo.InvariantCulture) : string.Empty,
+                ToolTip = "DN del circuito DOPO il bypass (verso l'utenza). Il DN a sinistra è quello PRIMA del bypass (lato collettore).\n" +
+                          "Il bypass, i pezzi dopo il T e l'intercettazione in cima hanno questo DN. Vuoto = uguale al DN."
+            };
+            row.DnAfter.TextChanged += (s, e) => Notify();
+            dnAfterPanel.Children.Add(row.DnAfter);
+            row.DnAfterBox = dnAfterPanel;
+            panel.Children.Add(dnAfterPanel);
+
+            // energy valve del circuito (mix 2 vie): una famiglia per DN, scelta a mano o automatica
+            var evPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 0, 0) };
+            evPanel.Children.Add(new TextBlock { Text = "energy valve", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
+            row.EnergyValve = new ComboBox { Width = 150, VerticalAlignment = VerticalAlignment.Center };
+            row.EnergyValve.Items.Add(AutoEnergyValve);
+            var evPlan = new ManifoldPlan();
+            evPlan.AccessoryFamilies.AddRange(_catalog.PipeAccessories);
+            foreach (var f in evPlan.EnergyValveFamilies()) row.EnergyValve.Items.Add(f.Name);
+            row.EnergyValve.SelectedIndex = 0;
+            if (!string.IsNullOrWhiteSpace(circuit.EnergyValveFamily) && row.EnergyValve.Items.Contains(circuit.EnergyValveFamily))
+                row.EnergyValve.SelectedItem = circuit.EnergyValveFamily;
+            row.EnergyValve.ToolTip = "Famiglia della energy valve (Belimo) di questo circuito, sul ritorno prima del T del bypass.\n" +
+                                      "\"" + AutoEnergyValve + "\" sceglie la famiglia il cui nome porta il DN del circuito (ev025r2… per DN25).";
+            row.EnergyValve.SelectionChanged += (s, e) => Notify();
+            evPanel.Children.Add(row.EnergyValve);
+            row.EnergyValveBox = evPanel;
+            panel.Children.Add(evPanel);
+
+            // valvola di zona: accessorio opzionale per ogni tipologia (oggi montata nella catena del mix 2 vie)
+            row.ZoneValve = new CheckBox
+            {
+                Content = "valvola di zona",
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0),
+                IsChecked = circuit.EffectiveWithZoneValve,
+                ToolTip = "Mette la valvola di zona (farfalla wafer, famiglia in \"Mostra di più\") su mandata e ritorno di questo circuito.\n" +
+                          "Predefinito: sì per il mix 2 vie, no per le altre tipologie; per quelle senza catena modellata resta dichiarata in anteprima."
+            };
+            row.ZoneValve.Checked += (s, e) => Notify();
+            row.ZoneValve.Unchecked += (s, e) => Notify();
+            panel.Children.Add(row.ZoneValve);
+            row.UpdateVisibility();
 
             var remove = new Button
             {
@@ -681,15 +847,25 @@ namespace SayRevit.Addin.UI
                 ReturnOffsetMm = ParseNumber(_returnOffset.Text, 300),
                 WithValves = _withValves.IsChecked == true,
                 BallValveMaxDnMm = ParseNumber(_ballMaxDn.Text, 32),
-                BallValveFamily = SelectedFamily(_ballFamily),
-                ButterflyValveFamily = SelectedFamily(_butterflyFamily),
                 ValvePnBar = SelectedPn(),
                 ValveDistanceMm = ParseNumber(_valveDistance.Text, 150),
                 ButterflyRollDegrees = ParseNumber((_butterflyRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90),
-                BallRollDegrees = ParseNumber((_ballRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90)
+                BallRollDegrees = ParseNumber((_ballRoll.SelectedItem as string ?? "90").TrimEnd('°'), 90),
+                Mix2GapMm = ParseNumber(_mix2Gap.Text, 150),
+                Mix2FlangedGapMm = ParseNumber(_mix2FlangedGap.Text, 0),
+                Mix2PumpSpaceMm = ParseNumber(_mix2PumpSpace.Text, 400),
+                Mix2EndPipeMm = ParseNumber(_mix2EndPipe.Text, 100),
+                Mix2RollDegrees = ParseNumber((_mix2Roll.SelectedItem as string ?? "90").TrimEnd('°'), 90),
+                StrainerRollDegrees = ParseNumber((_strainerRoll.SelectedItem as string ?? "270").TrimEnd('°'), 270),
+                StrainerReversed = _strainerReversed.IsChecked == true
             };
-            plan.BallValveTypes.AddRange(FamilyTypes(_ballFamily));
-            plan.ButterflyValveTypes.AddRange(FamilyTypes(_butterflyFamily));
+            // famiglie per DN di ogni elemento del registro: la tendina è la base, il pulsante "per DN…" le soglie
+            foreach (var picker in _pickers.Values)
+            {
+                picker.FillMap(plan.FamilyMaps[picker.Element.Key]);
+                plan.ElementTypes[picker.Element.Key].AddRange(picker.DefaultTypes());
+            }
+            plan.AccessoryFamilies.AddRange(_catalog.PipeAccessories);
             var type = SelectedType;
             if (type != null) plan.HeaderSizeCandidates.AddRange(type.Sizes);
             if (_autoHeaderDn.IsChecked != true)
@@ -700,7 +876,16 @@ namespace SayRevit.Addin.UI
             foreach (var row in _circuits)
             {
                 var dn = ParseDn(row.Dn.Text);
-                if (dn > 0) plan.Circuits.Add(new ManifoldCircuit(dn, row.SelectedKind));
+                if (dn <= 0) continue;
+                var circuit = new ManifoldCircuit(dn, row.SelectedKind);
+                if (circuit.KindInfo.HasBypass)
+                {
+                    var after = ParseDn(row.DnAfter == null ? null : row.DnAfter.Text);
+                    if (after > 0) circuit.DnAfterBypassMm = after;
+                }
+                if (circuit.KindInfo.IsChainModelled) circuit.EnergyValveFamily = row.SelectedEnergyValve;
+                if (row.ZoneValve != null && !circuit.KindInfo.IsBlind) circuit.WithZoneValve = row.ZoneValve.IsChecked == true;
+                plan.Circuits.Add(circuit);
             }
             return plan;
         }
@@ -741,8 +926,16 @@ namespace SayRevit.Addin.UI
                 if (_ballRoll.Items.Contains(storedBallRoll)) _ballRoll.SelectedItem = storedBallRoll;
                 // Le famiglie salvate valgono solo se sono caricate anche in QUESTO progetto:
                 // altrimenti resta la proposta fatta sul nome all'apertura.
-                SelectFamily(_ballFamily, settings.ManifoldBallValveFamily);
-                SelectFamily(_butterflyFamily, settings.ManifoldButterflyValveFamily);
+                foreach (var picker in _pickers.Values) picker.Load(settings.Family(picker.Element.Key));
+                _mix2Gap.Text = settings.ManifoldMix2GapMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _mix2FlangedGap.Text = settings.ManifoldMix2FlangedGapMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _mix2PumpSpace.Text = settings.ManifoldMix2PumpSpaceMm.ToString("0.##", CultureInfo.InvariantCulture);
+                _mix2EndPipe.Text = settings.ManifoldMix2EndPipeMm.ToString("0.##", CultureInfo.InvariantCulture);
+                var storedMixRoll = MepSize.Fmt(settings.ManifoldMix2RollDeg) + "°";
+                if (_mix2Roll.Items.Contains(storedMixRoll)) _mix2Roll.SelectedItem = storedMixRoll;
+                var storedStrainerRoll = MepSize.Fmt(settings.ManifoldStrainerRollDeg) + "°";
+                if (_strainerRoll.Items.Contains(storedStrainerRoll)) _strainerRoll.SelectedItem = storedStrainerRoll;
+                _strainerReversed.IsChecked = settings.ManifoldStrainerReversed;
                 FillPressureClasses();
                 if (settings.ManifoldValvePnBar > 0)
                 {
@@ -757,7 +950,7 @@ namespace SayRevit.Addin.UI
 
                 var stored = new ManifoldPlan();
                 stored.LoadCircuitsFromString(settings.ManifoldCircuits);
-                foreach (var c in stored.Circuits) AddCircuit(c.DnMm, c.Kind, false);
+                foreach (var c in stored.Circuits) AddCircuit(c, false);
             }
             finally
             {
@@ -782,21 +975,20 @@ namespace SayRevit.Addin.UI
             settings.ManifoldReturnOffsetMm = plan.ReturnOffsetMm;
             settings.ManifoldWithValves = plan.WithValves;
             settings.ManifoldBallValveMaxDnMm = plan.BallValveMaxDnMm;
-            // "(nessuna)" viene salvato com'è: è una scelta dell'utente, non un valore mancante.
-            settings.ManifoldBallValveFamily = plan.BallValveFamily ?? NoFamily;
-            settings.ManifoldButterflyValveFamily = plan.ButterflyValveFamily ?? NoFamily;
+            // famiglie per DN di ogni elemento; "(nessuna)" viene salvato com'è: è una scelta dell'utente, non un valore mancante
+            foreach (var picker in _pickers.Values) settings.ManifoldFamilies[picker.Element.Key] = picker.Store();
             settings.ManifoldValvePnBar = plan.ValvePnBar;
             settings.ManifoldValveDistanceMm = plan.ValveDistanceMm;
             settings.ManifoldButterflyRollDeg = plan.ButterflyRollDegrees;
             settings.ManifoldBallRollDeg = plan.BallRollDegrees;
+            settings.ManifoldMix2GapMm = plan.Mix2GapMm;
+            settings.ManifoldMix2FlangedGapMm = plan.Mix2FlangedGapMm;
+            settings.ManifoldMix2PumpSpaceMm = plan.Mix2PumpSpaceMm;
+            settings.ManifoldMix2EndPipeMm = plan.Mix2EndPipeMm;
+            settings.ManifoldMix2RollDeg = plan.Mix2RollDegrees;
+            settings.ManifoldStrainerRollDeg = plan.StrainerRollDegrees;
+            settings.ManifoldStrainerReversed = plan.StrainerReversed;
             settings.StartMode = StartMode;
-        }
-
-        /// <summary>Sceglie la famiglia salvata, se è caricata anche in questo progetto.</summary>
-        private static void SelectFamily(ComboBox combo, string name)
-        {
-            if (string.IsNullOrWhiteSpace(name)) return;
-            if (combo.Items.Contains(name)) combo.SelectedItem = name;
         }
 
         private static int IndexOf(KeyValuePair<string, DirectionKind>[] options, string name)

@@ -106,9 +106,34 @@ namespace SayRevit.Core.Model
         /// <summary>Rotazione della valvola attorno all'asse del tubo (gradi); la boax va a 90°.</summary>
         public double RollDegrees { get; set; }
 
+        /// <summary>
+        /// Parola che, a parità di DN, fa preferire un tipo della famiglia (es. "ductile" per la
+        /// valvola di zona Watts, che ha un tipo in ghisa grigia e uno in ghisa sferoidale per DN).
+        /// </summary>
+        public string PreferredTypeWord { get; set; }
+
+        /// <summary>
+        /// True = pezzo montato col verso invertito (girato di 180° attorno alla normale al tubo,
+        /// scambiando entrata e uscita): serve al filtro a Y, che dalla famiglia esce capovolto.
+        /// </summary>
+        public bool Reversed { get; set; }
+
         public string KindLabel
         {
-            get { return Kind == ValveKind.Ball ? "valvola a sfera" : "valvola boax"; }
+            get { return KindLabelOf(Kind); }
+        }
+
+        public static string KindLabelOf(ValveKind kind)
+        {
+            switch (kind)
+            {
+                case ValveKind.Ball: return "valvola a sfera";
+                case ValveKind.EnergyValve: return "valvola 2 vie (energy valve)";
+                case ValveKind.ZoneValve: return "valvola di zona";
+                case ValveKind.Strainer: return "filtro a Y";
+                case ValveKind.CheckValve: return "valvola di ritegno";
+                default: return "valvola boax";
+            }
         }
 
         public override string ToString()
@@ -121,11 +146,148 @@ namespace SayRevit.Core.Model
         }
     }
 
+    /// <summary>Cosa c'è in un punto della catena di uno stacco.</summary>
+    public enum StubItemKind
+    {
+        /// <summary>Pezzo in linea (valvola, filtro…), con o senza flange.</summary>
+        Piece,
+        /// <summary>Tratto di tubo libero di lunghezza data (anche uno spazio riservato, es. alla pompa).</summary>
+        Gap,
+        /// <summary>Raccordo a T da cui parte (o in cui arriva) il bypass.</summary>
+        Tee
+    }
+
+    /// <summary>
+    /// Un elemento della catena montata su uno stacco, dall'asse del collettore verso l'utenza.
+    /// Le posizioni non sono fissate qui: ogni pezzo parte dalla faccia d'uscita del precedente
+    /// (più il tubo libero che lo separa), perché le lunghezze reali dei pezzi si conoscono solo
+    /// in Revit; fa eccezione il primo pezzo, centrato a <see cref="CenterMm"/> dall'asse.
+    /// </summary>
+    public sealed class StubItem
+    {
+        public StubItemKind Kind { get; set; }
+
+        /// <summary>Pezzo da montare (solo <see cref="StubItemKind.Piece"/>).</summary>
+        public MepValve Piece { get; set; }
+
+        /// <summary>Lunghezza del tubo libero (solo <see cref="StubItemKind.Gap"/>), mm.</summary>
+        public double LengthMm { get; set; }
+
+        /// <summary>
+        /// Solo per il primo pezzo: distanza dall'asse del collettore al CENTRO del pezzo (mm),
+        /// come per la valvola di intercettazione. Null = a partire dalla faccia precedente.
+        /// </summary>
+        public double? CenterMm { get; set; }
+
+        /// <summary>Nome leggibile (es. "spazio riservato alla pompa"), per anteprima e diagnostica.</summary>
+        public string Label { get; set; }
+
+        /// <summary>
+        /// Solo per il T: DN dello stacco DOPO il T (mm), verso l'utenza; 0 = invariato. Il T è
+        /// ridotto e da lì in poi tubi e pezzi hanno questa misura.
+        /// </summary>
+        public double SizeAfterMm { get; set; }
+
+        /// <summary>
+        /// Solo per i pezzi: i pezzi con la stessa chiave nelle catene gemelle (mandata/ritorno di
+        /// uno stesso circuito, <see cref="MepBranch.PairKey"/>) vengono montati alla stessa quota:
+        /// la catena più corta riceve tubo in più davanti al pezzo. Null = nessun allineamento.
+        /// </summary>
+        public string AlignKey { get; set; }
+
+        public static StubItem Gap(double lengthMm, string label = null)
+        {
+            return new StubItem { Kind = StubItemKind.Gap, LengthMm = lengthMm, Label = label ?? "tubo" };
+        }
+
+        public static StubItem Of(MepValve piece, double? centerMm = null)
+        {
+            return new StubItem { Kind = StubItemKind.Piece, Piece = piece, CenterMm = centerMm, Label = piece == null ? "pezzo" : piece.KindLabel };
+        }
+
+        public static StubItem TeeFor(string label, double sizeAfterMm = 0)
+        {
+            return new StubItem { Kind = StubItemKind.Tee, Label = label ?? "T del bypass", SizeAfterMm = sizeAfterMm };
+        }
+
+        public override string ToString()
+        {
+            switch (Kind)
+            {
+                case StubItemKind.Piece: return Piece == null ? "pezzo" : Piece.KindLabel + (string.IsNullOrWhiteSpace(Piece.TypeName) ? "" : " \"" + Piece.TypeName + "\"");
+                case StubItemKind.Gap: return Label + " " + MepSize.Fmt(LengthMm) + " mm";
+                default: return Label;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Bypass tra due stacchi gemelli (mandata e ritorno dello stesso circuito). Dal T di ogni
+    /// stacco parte un tubo orizzontale ortogonale: dalla mandata di traverso (verso la base del
+    /// ritorno, per tutta la distanza tra le basi), dal ritorno lungo la base (mezzo interasse,
+    /// indietro verso la mandata). I due tubi finiscono nello stesso punto in pianta, a quote
+    /// diverse, e sono uniti da un tratto lungo la direzione degli stacchi con due gomiti, sul
+    /// quale sta l'eventuale valvola di ritegno.
+    /// </summary>
+    public sealed class MepBypass
+    {
+        /// <summary>Stessa chiave sui due stacchi del circuito (es. "C3").</summary>
+        public string Key { get; set; }
+
+        /// <summary>Posizione dello stacco gemello rispetto a questo: lungo il tratto principale (mm).</summary>
+        public double PartnerAlongMm { get; set; }
+
+        /// <summary>Posizione dello stacco gemello rispetto a questo: a sinistra della direzione del tratto (mm).</summary>
+        public double PartnerSideMm { get; set; }
+
+        /// <summary>Tubo orizzontale che parte dal T di QUESTO stacco: componente lungo il tratto (mm). Uno solo dei due è diverso da zero.</summary>
+        public double LegAlongMm { get; set; }
+
+        /// <summary>Tubo orizzontale che parte dal T di QUESTO stacco: componente a sinistra della direzione del tratto (mm).</summary>
+        public double LegSideMm { get; set; }
+
+        /// <summary>Lunghezza del tubo orizzontale che parte da questo T (mm).</summary>
+        public double LegLengthMm
+        {
+            get { return Math.Sqrt(LegAlongMm * LegAlongMm + LegSideMm * LegSideMm); }
+        }
+
+        /// <summary>Pezzo sul tratto di raccordo tra i due tubi orizzontali (valvola di ritegno); null = niente.</summary>
+        public MepValve InlinePiece { get; set; }
+
+        /// <summary>DN dei tubi del bypass (mm): quello del circuito dopo il bypass. 0 = come lo stacco.</summary>
+        public double DnMm { get; set; }
+
+        /// <summary>Distanza in pianta tra i due stacchi (mm).</summary>
+        public double PlanDistanceMm
+        {
+            get { return Math.Sqrt(PartnerAlongMm * PartnerAlongMm + PartnerSideMm * PartnerSideMm); }
+        }
+    }
+
     /// <summary>Uno stacco (derivazione) da un tratto principale.</summary>
     public sealed class MepBranch
     {
         /// <summary>Valvola in linea sullo stacco; null = nessuna valvola.</summary>
         public MepValve Valve { get; set; }
+
+        /// <summary>
+        /// Catena completa dei pezzi sullo stacco, quando non c'è solo la valvola: intercettazione
+        /// (primo elemento, centrato alla sua distanza), tubi liberi, T del bypass, altri pezzi.
+        /// Vuota = solo <see cref="Valve"/>. Con la catena, <see cref="LengthAfterValveMm"/> è il
+        /// tubo dopo l'ULTIMO pezzo della catena.
+        /// </summary>
+        public List<StubItem> Chain { get; } = new List<StubItem>();
+
+        /// <summary>Bypass verso lo stacco gemello, se la catena ha un T; null = nessuno.</summary>
+        public MepBypass Bypass { get; set; }
+
+        /// <summary>
+        /// Chiave comune agli stacchi gemelli di uno stesso circuito (mandata e ritorno): i pezzi
+        /// con lo stesso <see cref="StubItem.AlignKey"/> nelle due catene vengono portati alla
+        /// stessa quota dal costruttore. Null = nessun gemello.
+        /// </summary>
+        public string PairKey { get; set; }
 
         public MepSize Size { get; set; }
         public int Count { get; set; } = 1;

@@ -26,15 +26,59 @@ runs in a single transaction (one Undo step), and created elements are selected 
   stub from the header outwards (the return stub always carries a shut-off valve):
   - *Diretto (no mix)* — shut-off valve → pump; circuit at header temperature.
   - *Mix 3 vie* — shut-off → 3-way mixing valve fed also by a supply/return bypass → pump.
-  - *Mix 2 vie (iniezione)* — shut-off → 2-way valve on the primary → bypass → secondary pump.
+  - *Mix 2 vie (iniezione)* — fully modelled (see below): supply = shut-off → bypass tee → pump
+    space → zone valve → shut-off; return = shut-off → 2-way energy valve → bypass tee → Y strainer
+    → zone valve → shut-off; the bypass joins the two tees with a check valve.
   - *Senza pompa* — shut-off valve only, the circuit is driven by the primary; the pipe **after
     the valve** is fixed (see below).
   - *Cieco* — blind stub: shut-off valve only and the stub **stops at the second flange** (or at
     the ball valve outlet), no pipe downstream.
-  The preview lists the types in use with their component chains. Today the shut-off valve is
-  modelled in Revit; pumps, mixing/2-way valves and bypasses are declared as a warning until
-  their families are wired in. Settings store circuits as `DN:type`
-  (`20:direct;16:mix3;25:mix2;32:nopump;25:blind`); a bare DN from older settings files is read as *direct*.
+  The preview lists the types in use with their component chains. Today the shut-off valve and
+  the whole *mix 2 vie* chain are modelled in Revit; the pumps, the 3-way valve and the mix 3 vie
+  bypass are declared as a warning until their families are wired in. Settings store circuits as
+  `DN:type` (`20:direct;16:mix3;25:mix2;32:nopump;25:blind`); a bare DN from older settings files is read as *direct*.
+- **Mix 2 vie (iniezione)** — each stub carries a *chain* of pieces mounted one after the other
+  from the header: the first shut-off valve is centred at its usual distance, every next piece
+  starts at the outlet face of the previous one plus a free pipe (*Tubo tra i pezzi*, 150 mm;
+  *Tra pezzi flangiati*, 50 mm, between strainer, zone valve and top shut-off; **never less than
+  50 mm of straight pipe between two elements**), and the stub ends with a short pipe after the
+  top shut-off (*Tubo finale*, 100 mm). Supply stub: shut-off → tee →
+  reserved **pump space** (400 mm of plain pipe, no pump family yet) → zone valve between flanges →
+  second shut-off. Return stub: shut-off → **Belimo Energy Valve** → tee → **Y strainer** → zone
+  valve → second shut-off. Each circuit row with a bypass (mix 2 vie, mix 3 vie) has a **DN dopo
+  bypass** field: the DN on the left is the one before the bypass (header side, used to size the
+  header and the first shut-off and energy valve); the bypass, every piece after the tee and the
+  top shut-off take the DN after the bypass, through a reducing tee. Families: the energy valve is
+  one family per DN, picked per circuit from a dropdown in the row (default *automatica sul DN*:
+  `ev025r2…`, `ev032r2…`, `ev050r2…`, preferring `+BAC`; a family of another DN is accepted with a
+  warning; the DN50 families have a single pipe connector, so they are connected on one side and the
+  other end is read from the pipe body geometry); the zone valve (Watts Sylax wafer, type `DNxx -
+  Ductile Iron` preferred), the strainer (Watts Y33P from DN40, or any other loaded family; it has
+  its own rotation field and is mounted flipped by default, *Filtro a Y capovolto*) and the check
+  valve (KSB BOA-RVK wafer) are chosen in **Mostra di più**. **Every element is customisable per
+  diameter**: each family dropdown (ball valve, boax, energy valve, zone valve, strainer, check
+  valve) has a **per DN…** button that opens a list of thresholds "da DN x in su usa la famiglia y"
+  (`FamilyByDn`); by default one family covers every DN, below the first threshold the dropdown's
+  family applies, and a threshold set to *(nessuna)* drops the piece from that DN up. Types are
+  matched by name inside whichever family the DN resolves to; the settings keys `Manifold*Family`
+  store `famiglia|40=altra|100=terza` (a bare name is the old single-family format; the energy
+  valve's key is empty for *automatica sul DN*, and the row choice still wins). The elements
+  themselves are declared once in `ManifoldElements.All` (key, kind, labels, name hints, flanges,
+  panel section, settings key): the panel pickers, settings keys, factory, preview notes and family
+  preparation are all derived from that registry, and every piece enters a chain through
+  `PieceFor(key, dn)`. The preview also prints each chain on one line (`C1 mandata: collettore →
+  [boax DN50*] — 150 — [T →DN40] — …`), the notation used to compare a reference photo with what
+  will be built (see `docs/GUIDA-AGENTE-collettore.md`). Families that are still level-based
+  (conversion or reload failed, e.g. because the family is open in the family editor) are skipped
+  on vertical stubs with a warning instead of being placed crosswise. The **bypass** leaves the supply
+  tee (just above the shut-off) **across** the headers (Y) for the whole header distance, rises
+  there on a vertical run with two elbows and the check valve, then runs **along** the header (X)
+  for half a pitch into the return tee (above the energy valve). It needs the return header and
+  vertical stubs; otherwise the chains are built without tees and a warning says why. Tees and
+  elbows come from the pipe type's routing preferences. Auto spacing measures every piece of
+  both chains and the bypass vertical, which stands in the plane of the return stubs. Pieces
+  whose connector size differs from the pipe (e.g. a DN40 strainer on a DN25 circuit) are placed
+  but left unconnected, with a warning: connecting them makes Revit drop the pipe at commit.
 - **Pipe after the valve**: for *senza pompa* circuits the pipe from the outlet face of the last
   mounted piece (second flange of the boax, or the ball valve outlet) to the end of the stub is
   2000 mm long (a field), on the supply and on the return stub alike; for *cieco* circuits that
@@ -114,7 +158,9 @@ copies the add-in to `%APPDATA%\Autodesk\Revit\Addins\<version>`. Restart Revit:
 
 While Revit is open with a project, writing `%APPDATA%\sayRevit\automation\request.txt` (any
 content, optionally `clean=tracked|all|none`, `build=none` to only clean up, `start=x,y` in mm to
-build away from what is already there, and `Manifold*=` overrides of the saved settings)
+build away from what is already there, `view=x,y,z` for the camera direction of the exported
+image, `catalog=yes` to dump every loaded accessory/fitting family with its connectors and the
+pipe types' routing preferences to `catalog.txt`, and `Manifold*=` overrides of the saved settings)
 makes the loader run the add-in without a window: the previous bench run is deleted, the
 manifold is rebuilt from the saved settings, a PNG of the 3D view is exported to `view.png`
 and the summary, notes and warnings go to `result.txt` next to it. Combined with the hot
@@ -135,7 +181,9 @@ unloadable `AssemblyLoadContext`; on Revit 2024 (.NET Framework) old copies stay
 src/SayRevit.Core     intent model (MepPlan, ManifoldPlan), IT/EN rule-based parser, preview formatter  [netstandard2.0]
 src/SayRevit.Claude   Claude parser with structured output                                              [netstandard2.0, Anthropic SDK]
 src/SayRevit.Addin    Revit add-in: ribbon, WPF UI, model catalog reader, element builder               [net48 / net8.0-windows / net10.0-windows]
-tests/                xunit tests (151), OS-independent
+tests/                xunit tests (184), OS-independent
+docs/GUIDA-AGENTE-collettore.md   developer/agent guide: code map, the five geometric primitives, recipes, photo-to-chain procedure
+CLAUDE.md             rules and commands for coding agents (points to the guide)
 src/SayRevit.Loader/  hot loader: the only assembly Revit loads directly (see below)
 scripts/              install.ps1 / uninstall.ps1
 ```

@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Text;
 using System.Windows.Interop;
 using Autodesk.Revit.Attributes;
@@ -84,9 +86,23 @@ namespace SayRevit.Addin
             }
             var report = builder.Build(plan, options);
 
-            // In modalità Collettore la creazione riuscita e pulita non interrompe l'utente con
-            // il riepilogo; il dialogo resta per gli errori e per gli avvisi (che vanno visti).
-            var silent = window.ManifoldMode && report.Succeeded && report.Warnings.Count == 0;
+            // In modalità Collettore la creazione riuscita non interrompe l'utente con il riepilogo
+            // "Elementi creati": il dialogo resta solo per gli errori. Gli eventuali avvisi finiscono
+            // nel file di diagnostica, così non vanno persi.
+            var silent = window.ManifoldMode && report.Succeeded;
+            if (silent && report.Warnings.Count > 0)
+            {
+                try
+                {
+                    var path = RevitPlanBuilder.DiagPath;
+                    Directory.CreateDirectory(Path.GetDirectoryName(path));
+                    File.AppendAllLines(path, report.Warnings.Select(w => "Avviso (creazione riuscita): " + w));
+                }
+                catch
+                {
+                    // solo diagnostica
+                }
+            }
             if (!silent)
             {
                 var sb = new StringBuilder();
