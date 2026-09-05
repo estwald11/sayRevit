@@ -1,9 +1,23 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using SayRevit.Core.Parsing;
 
 namespace SayRevit.Core.Model
 {
+    /// <summary>Soglia proposta all'apertura del pannello: "da DN x in su" la prima famiglia del progetto che contiene una delle parole.</summary>
+    public sealed class ElementThreshold
+    {
+        public ElementThreshold(double fromDnMm, params string[] hints)
+        {
+            FromDnMm = fromDnMm;
+            Hints = hints;
+        }
+
+        public double FromDnMm { get; }
+        public string[] Hints { get; }
+    }
+
     /// <summary>Sezione del pannello in cui l'elemento si sceglie.</summary>
     public enum ElementSection
     {
@@ -11,7 +25,10 @@ namespace SayRevit.Core.Model
         Shutoff,
 
         /// <summary>"Mix 2 vie (iniezione)": accessori della catena.</summary>
-        MixTwoWay
+        MixTwoWay,
+
+        /// <summary>"Pompa": la famiglia delle pompe (il modello si sceglie nella riga del circuito).</summary>
+        Pump
     }
 
     /// <summary>
@@ -50,10 +67,39 @@ namespace SayRevit.Core.Model
         /// <summary>True se il pezzo si monta tra due flange automatiche (wafer).</summary>
         public bool WithFlanges { get; set; }
 
+        /// <summary>
+        /// Parole nel nome della famiglia per cui il pezzo è filettato e si monta SENZA le flange
+        /// automatiche anche se <see cref="WithFlanges"/> è vero (es. il ritegno Giacomini R60 accanto alla boa-rvk wafer).
+        /// </summary>
+        public string[] NoFlangeHints { get; set; } = new string[0];
+
+        /// <summary>
+        /// Soglie proposte all'apertura del pannello quando non c'è nulla di salvato (es. ritegno: da DN40 la boa-rvk);
+        /// l'utente le cambia con "per DN…".
+        /// </summary>
+        public ElementThreshold[] DefaultThresholds { get; set; } = new ElementThreshold[0];
+
+        /// <summary>True se con questa famiglia il pezzo va montato senza flange (famiglia filettata).</summary>
+        public bool MountsWithoutFlanges(string familyName)
+        {
+            if (string.IsNullOrWhiteSpace(familyName)) return false;
+            var name = TextUtil.Fold(familyName);
+            return NoFlangeHints.Any(h => name.Contains(TextUtil.Fold(h)));
+        }
+
+        /// <summary>True se il pezzo con questa famiglia si monta tra due flange automatiche.</summary>
+        public bool FlangesFor(string familyName)
+        {
+            return WithFlanges && !MountsWithoutFlanges(familyName);
+        }
+
         /// <summary>True se una famiglia vuota significa "scelta automatica sul nome" (energy valve) e non "nessun pezzo".</summary>
         public bool AutoByName { get; set; }
 
         public ElementSection Section { get; set; }
+
+        /// <summary>True se la famiglia sta tra le attrezzature meccaniche (pompe) e non tra gli accessori per tubazioni.</summary>
+        public bool FromMechanicalEquipment { get; set; }
 
         /// <summary>Suggerimento della tendina.</summary>
         public string Tooltip { get; set; }
@@ -71,6 +117,7 @@ namespace SayRevit.Core.Model
         public const string ZoneValve = "zone";
         public const string Strainer = "strainer";
         public const string CheckValve = "check";
+        public const string Pump = "pump";
 
         public static readonly IReadOnlyList<ManifoldElement> All = new List<ManifoldElement>
         {
@@ -96,7 +143,7 @@ namespace SayRevit.Core.Model
                 UiLabel = "Energy valve:", SettingsKey = "ManifoldEnergyValveFamily",
                 Hints = new string[0], AutoByName = true, Section = ElementSection.MixTwoWay,
                 Tooltip = "Famiglia della energy valve (Belimo) sul ritorno, prima del T del bypass.\n" +
-                          "\"(automatica sul DN)\" sceglie la famiglia il cui nome porta il DN del circuito (ev025r2… per DN25);\n" +
+                          "\"(automatica sul DN)\" sceglie il tipo o la famiglia il cui nome porta il DN del circuito (EV025R2+BAC, ev025r2… per DN25);\n" +
                           "con \"per DN…\" si fissa una famiglia per fascia di diametri. La scelta nella riga del circuito vince comunque."
             },
             new ManifoldElement
@@ -112,16 +159,39 @@ namespace SayRevit.Core.Model
             {
                 Key = Strainer, Kind = ValveKind.Strainer, Label = "filtro a Y", ShortLabel = "filtro Y",
                 UiLabel = "Filtro a Y:", SettingsKey = "ManifoldStrainerFamily",
-                Hints = new[] { "y33p", "strainerwithdraincock", "strainer", "filtro impurita", "filtro a y" },
+                // base proposta: IMI TA-STR filettato (DN15–DN32, senza flange); da DN40 il VIR 895 wafer tra due
+                // flange automatiche, come la boax. Le famiglie con le flange proprie (TA-STR F, Watts Y33P) restano senza.
+                Hints = new[] { "ta-str_rfa", "y33p", "strainerwithdraincock", "strainer", "filtro impurita", "filtro a y", "ta-str", "vir_895", "895" },
+                WithFlanges = true,
+                NoFlangeHints = new[] { "ta-str", "y33p", "strainerwithdraincock" },
+                DefaultThresholds = new[] { new ElementThreshold(40, "vir_895", "895") },
                 Section = ElementSection.MixTwoWay,
-                Tooltip = "Filtro a Y sul ritorno, prima della valvola di zona (Watts Y33P: da DN40; per DN minori scegli un'altra famiglia con \"per DN…\")."
+                Tooltip = "Filtro a Y sul ritorno, prima della valvola di zona.\n" +
+                          "Predefinito: IMI TA-STR filettato fino a DN32, da DN40 VIR 895 wafer tra due flange (come la boax);\n" +
+                          "la soglia si cambia con \"per DN…\". TA-STR F e Watts Y33P hanno le flange proprie e si montano senza."
             },
             new ManifoldElement
             {
                 Key = CheckValve, Kind = ValveKind.CheckValve, Label = "valvola di ritegno", ShortLabel = "ritegno",
                 UiLabel = "Ritegno sul bypass:", SettingsKey = "ManifoldCheckValveFamily",
-                Hints = new[] { "boa-rvk", "rvk", "ritegno", "check" }, WithFlanges = true, Section = ElementSection.MixTwoWay,
-                Tooltip = "Valvola di ritegno wafer sul tratto verticale del bypass, tra due flange (KSB BOA-RVK)."
+                // base proposta: Giacomini R60 (filettata, DN10–DN32); da DN40 la KSB BOA-RVK wafer tra flange
+                Hints = new[] { "r60", "giacomini", "boa-rvk", "rvk", "ritegno", "check" }, WithFlanges = true,
+                NoFlangeHints = new[] { "r60", "giacomini" },
+                DefaultThresholds = new[] { new ElementThreshold(40, "boa-rvk", "rvk") },
+                Section = ElementSection.MixTwoWay,
+                Tooltip = "Valvola di ritegno sul tratto verticale del bypass.\n" +
+                          "Predefinito: Giacomini R60 (filettata, tipi R60Y002 = DN10, R60Y003 = DN15… lungo la serie DN) fino a DN32,\n" +
+                          "da DN40 la KSB BOA-RVK wafer tra due flange; la soglia si cambia con \"per DN…\"."
+            },
+            new ManifoldElement
+            {
+                Key = Pump, Kind = ValveKind.Pump, Label = "pompa", ShortLabel = "pompa",
+                UiLabel = "Famiglia pompa:", SettingsKey = "ManifoldPumpFamily",
+                Hints = new[] { "magna", "grundfos", "pompa", "pump", "wilo" }, Section = ElementSection.Pump,
+                FromMechanicalEquipment = true,
+                Tooltip = "Famiglia delle pompe di circolazione (attrezzatura meccanica, es. Grundfos MAGNA3).\n" +
+                          "Il modello (tipo) si sceglie in ogni riga del circuito: diretto, mix 3 vie e mix 2 vie.\n" +
+                          "La pompa va sulla mandata dopo il bypass; i modelli flangiati (\"F\" nel nome) vengono montati tra due flange."
             }
         };
 

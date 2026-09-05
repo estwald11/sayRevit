@@ -1,4 +1,4 @@
-using SayRevit.Core.Model;
+﻿using SayRevit.Core.Model;
 using Xunit;
 
 namespace SayRevit.Core.Tests
@@ -39,6 +39,20 @@ namespace SayRevit.Core.Tests
         [InlineData("2\" Lever", 50)]
         [InlineData("1-1/2\" Lever", 40)]
         public void MisuraInPollici_DiventaDn(string name, double expected)
+        {
+            Assert.Equal(expected, ValveTypeMatcher.DnFromTypeName(name));
+        }
+
+        [Theory]
+        [InlineData("R60Y002", 10)]
+        [InlineData("R60Y003", 15)]
+        [InlineData("R60Y004", 20)]
+        [InlineData("R60Y005", 25)]
+        [InlineData("R60Y006", 32)]
+        [InlineData("R60Y007", 40)]
+        [InlineData("R60Y011", 100)]
+        [InlineData("r60y008", 50)]
+        public void CodiciGiacominiR60_ContanoLungoLaSerieDn(string name, double expected)
         {
             Assert.Equal(expected, ValveTypeMatcher.DnFromTypeName(name));
         }

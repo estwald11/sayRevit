@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -56,7 +56,7 @@ namespace SayRevit.Addin
         // --- famiglie degli elementi (registro ManifoldElements): una chiave per elemento ---
         // Ogni chiave "…Family" (es. ManifoldZoneValveFamily) è una famiglia per DN nella forma di
         // FamilyByDn: "famiglia" oppure "famiglia|40=altra|100=terza" (soglie "da DN in su").
-        // Per la energy valve il vuoto significa "automatica sul nome" (ev025r2… per DN25).
+        // Per la energy valve il vuoto significa "automatica sul nome" (tipo EV025R2+BAC o famiglia ev025r2… per DN25).
         /// <summary>Famiglia per DN di ogni elemento, per chiave del registro (ball, butterfly, energy, zone, strainer, check).</summary>
         public Dictionary<string, string> ManifoldFamilies { get; } =
             ManifoldElements.All.ToDictionary(e => e.Key, e => string.Empty, StringComparer.OrdinalIgnoreCase);
@@ -83,6 +83,10 @@ namespace SayRevit.Addin
         public double ManifoldStrainerRollDeg { get; set; } = 270;
         /// <summary>Filtro a Y montato col verso invertito rispetto alla famiglia.</summary>
         public bool ManifoldStrainerReversed { get; set; } = true;
+        /// <summary>Rotazione della pompa attorno all'asse del tubo (gradi).</summary>
+        public double ManifoldPumpRollDeg { get; set; } = 90;
+        /// <summary>Pompa montata col verso invertito rispetto alla famiglia.</summary>
+        public bool ManifoldPumpReversed { get; set; }
 
         public static string FilePath
         {
@@ -156,6 +160,8 @@ namespace SayRevit.Addin
                 case "ManifoldMix2RollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var mr)) s.ManifoldMix2RollDeg = mr; break;
                 case "ManifoldStrainerRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var fr)) s.ManifoldStrainerRollDeg = fr; break;
                 case "ManifoldStrainerReversed": s.ManifoldStrainerReversed = v == "true"; break;
+                case "ManifoldPumpRollDeg": if (double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var pr)) s.ManifoldPumpRollDeg = pr; break;
+                case "ManifoldPumpReversed": s.ManifoldPumpReversed = v == "true"; break;
             }
             }
         }
@@ -196,7 +202,9 @@ namespace SayRevit.Addin
                     "ManifoldMix2EndPipeMm=" + ManifoldMix2EndPipeMm.ToString(CultureInfo.InvariantCulture),
                     "ManifoldMix2RollDeg=" + ManifoldMix2RollDeg.ToString(CultureInfo.InvariantCulture),
                     "ManifoldStrainerRollDeg=" + ManifoldStrainerRollDeg.ToString(CultureInfo.InvariantCulture),
-                    "ManifoldStrainerReversed=" + (ManifoldStrainerReversed ? "true" : "false")
+                    "ManifoldStrainerReversed=" + (ManifoldStrainerReversed ? "true" : "false"),
+                    "ManifoldPumpRollDeg=" + ManifoldPumpRollDeg.ToString(CultureInfo.InvariantCulture),
+                    "ManifoldPumpReversed=" + (ManifoldPumpReversed ? "true" : "false")
                 };
                 // una riga per elemento del registro (ManifoldBallValveFamily=…, ManifoldZoneValveFamily=…)
                 foreach (var element in ManifoldElements.All)

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -58,9 +58,21 @@ namespace SayRevit.Core.Model
 
         /// <summary>
         /// Mix 2 vie: famiglia della energy valve scelta dall'utente per questo circuito; vuota =
-        /// scelta automatica sul DN dal nome della famiglia ("ev025r2…" per DN25).
+        /// scelta automatica sul DN dal nome del tipo ("EV025R2+BAC") o della famiglia ("ev025r2…").
         /// </summary>
         public string EnergyValveFamily { get; set; }
+
+        /// <summary>
+        /// Mix 2 vie: tipo della energy valve scelto dall'utente dentro <see cref="EnergyValveFamily"/>,
+        /// quando la famiglia è unica con un tipo per DN ("EV032R2+BAC"); vuoto = il tipo del DN del circuito.
+        /// </summary>
+        public string EnergyValveType { get; set; }
+
+        /// <summary>
+        /// Modello (tipo) della pompa scelto nella riga, nella famiglia della pompa del piano
+        /// ("MAGNA3 25-60 PN10 - 97924245"); vuoto = nessuna pompa (nel mix 2 vie resta lo spazio riservato).
+        /// </summary>
+        public string PumpType { get; set; }
 
         /// <summary>
         /// Valvola di zona sullo stacco (accessorio opzionale, scelto dall'utente per ogni circuito).
@@ -190,7 +202,7 @@ namespace SayRevit.Core.Model
         {
             if (circuit == null || ValveFor(circuit) == null) return null;
             if (circuit.KindInfo.IsBlind) return 0;
-            if (HasChain(circuit)) return Mix2EndPipeMm;
+            if (circuit.KindInfo.IsChainModelled && HasChain(circuit)) return Mix2EndPipeMm;
             return circuit.KindInfo.UsesPipeAfterValve ? NoPumpPipeAfterValveMm : (double?)null;
         }
 
@@ -198,11 +210,12 @@ namespace SayRevit.Core.Model
 
         /// <summary>
         /// Famiglie di accessori caricate nel progetto (nome + tipi): servono a scegliere per DN
-        /// la famiglia della energy valve, che è una famiglia diversa per ogni misura.
+        /// la energy valve, dal nome del tipo (famiglia unica Belimo 2027, "EV025R2+BAC") o della
+        /// famiglia (vecchie famiglie per DN, "ev025r2…").
         /// </summary>
         public List<CatalogFamily> AccessoryFamilies { get; } = new List<CatalogFamily>();
 
-        /// <summary>Parola preferita nel nome della famiglia della energy valve a parità di DN ("bac" tra +BAC e +MID).</summary>
+        /// <summary>Parola preferita nel nome del tipo o della famiglia della energy valve a parità di DN ("bac" tra +BAC e +MID).</summary>
         public string EnergyValvePreferredWord { get; set; } = "bac";
 
         /// <summary>
@@ -226,7 +239,8 @@ namespace SayRevit.Core.Model
 
         /// <summary>
         /// Famiglia della energy valve per DN, scelta dall'utente: di base vuota (= automatica sul
-        /// nome, "ev025r2…" per DN25); con le soglie si può fissare una famiglia per fascia di DN.
+        /// nome, tipo "EV025R2+BAC" o famiglia "ev025r2…" per DN25); con le soglie si può fissare
+        /// una famiglia per fascia di DN.
         /// La scelta fatta nella riga del circuito vince comunque.
         /// </summary>
         public FamilyByDn EnergyValveMap
@@ -364,14 +378,14 @@ namespace SayRevit.Core.Model
             return Math.Max(Gap(Mix2GapMm), Math.Ceiling(EnergyValveStraightFactor * InnerDiameterMm(dnMm)));
         }
 
-        /// <summary>DN del tubo adiacente alla energy valve: quello della valvola (dal nome della famiglia) se è più piccola dello stacco, altrimenti lo stacco.</summary>
+        /// <summary>DN del tubo adiacente alla energy valve: quello della valvola (dal nome del tipo o della famiglia) se è più piccola dello stacco, altrimenti lo stacco.</summary>
         public static double EnergyValveStraightDn(MepValve ev, double stubDnMm)
         {
-            var evDn = ev == null ? null : EnergyValveDnOf(ev.FamilyName);
+            var evDn = EnergyValveDnOf(ev);
             return evDn.HasValue && evDn.Value > 0 && evDn.Value < stubDnMm ? evDn.Value : stubDnMm;
         }
 
-        /// <summary>Spazio riservato alla pompa sulla mandata (mm): tubo libero, la famiglia non c'è ancora.</summary>
+        /// <summary>Spazio riservato alla pompa sulla mandata (mm): tubo libero, quando nella riga non è scelto un modello di pompa.</summary>
         public double Mix2PumpSpaceMm { get; set; } = 400;
 
         /// <summary>Tubo dopo l'intercettazione in cima alla catena (mm), su mandata e ritorno.</summary>
@@ -380,10 +394,21 @@ namespace SayRevit.Core.Model
         /// <summary>Rotazione attorno all'asse del tubo di energy valve, valvola di zona, filtro e ritegno (gradi).</summary>
         public double Mix2RollDegrees { get; set; } = 90;
 
-        /// <summary>True se sullo stacco del circuito va montata la catena completa (mix 2 vie con intercettazione).</summary>
+        /// <summary>
+        /// True se sullo stacco del circuito va montata una catena di pezzi: quella completa del mix 2
+        /// vie, oppure intercettazione → pompa (→ valvola di zona) sulla mandata di un diretto o di
+        /// un mix 3 vie con un modello di pompa scelto. Serve comunque l'intercettazione.
+        /// </summary>
         public bool HasChain(ManifoldCircuit circuit)
         {
-            return circuit != null && circuit.KindInfo.IsChainModelled && ValveFor(circuit.DnMm) != null;
+            if (circuit == null || ValveFor(circuit.DnMm) == null) return false;
+            return circuit.KindInfo.IsChainModelled || HasPumpChain(circuit);
+        }
+
+        /// <summary>Diretto o mix 3 vie con un modello di pompa scelto e trovato nella famiglia: la pompa si monta sulla mandata.</summary>
+        public bool HasPumpChain(ManifoldCircuit circuit)
+        {
+            return circuit != null && !circuit.KindInfo.IsChainModelled && circuit.KindInfo.HasPump && PumpFor(circuit) != null;
         }
 
         /// <summary>True se il bypass del mix 2 vie può essere costruito: serve il ritorno e stacchi verticali.</summary>
@@ -395,51 +420,150 @@ namespace SayRevit.Core.Model
         private static readonly Regex EnergyValveRx = new Regex(@"^ev0*(\d+)(r2|f)", RegexOptions.IgnoreCase);
 
         /// <summary>
-        /// Famiglia della energy valve per il DN: tra le famiglie caricate, quelle il cui nome inizia
-        /// per "ev" + DN (es. "ev025r2+bac_(1)" per DN25); a parità di DN vince quella con
-        /// <see cref="EnergyValvePreferredWord"/> nel nome. Null se per quel DN non c'è.
+        /// Una energy valve montabile: famiglia, tipo e DN dichiarato nel nome. Il DN viene dal nome
+        /// del tipo quando la famiglia è unica con un tipo per misura (Belimo 2027,
+        /// "Belimo_EV…R2_BAC…" con tipi "EV025R2+BAC" → DN25), altrimenti dal nome della famiglia
+        /// (vecchie famiglie per DN, "ev025r2+bac_(1)" → DN25).
         /// </summary>
-        public CatalogFamily EnergyValveFamilyFor(double dnMm)
+        public sealed class EnergyValveChoice
+        {
+            public CatalogFamily Family { get; set; }
+            public string TypeName { get; set; }
+            public double DnMm { get; set; }
+            /// <summary>True se il DN è letto dal nome del tipo (famiglia unica con un tipo per DN).</summary>
+            public bool DnFromType { get; set; }
+
+            public string FamilyName { get { return Family == null ? null : Family.Name; } }
+
+            /// <summary>Voce per la tendina della riga: "EV032R2+BAC — famiglia" se il DN sta nel tipo, altrimenti la famiglia.</summary>
+            public string Label { get { return DnFromType ? TypeName + " — " + FamilyName : FamilyName; } }
+
+            /// <summary>Contiene la parola preferita (nel tipo o nella famiglia)?</summary>
+            public bool Has(string foldedWord)
+            {
+                if (string.IsNullOrEmpty(foldedWord)) return false;
+                return TextUtil.Fold(TypeName ?? string.Empty).Contains(foldedWord) ||
+                       TextUtil.Fold(FamilyName ?? string.Empty).Contains(foldedWord);
+            }
+        }
+
+        /// <summary>
+        /// Tutte le energy valve del progetto: per ogni famiglia caricata, i tipi il cui nome porta il
+        /// DN ("EV025R2+BAC"); se nessun tipo lo porta ma il nome della famiglia sì ("ev025r2…"),
+        /// una sola scelta con il primo tipo. In ordine di DN, poi famiglia, poi tipo.
+        /// </summary>
+        public List<EnergyValveChoice> EnergyValveChoices()
+        {
+            var list = new List<EnergyValveChoice>();
+            foreach (var f in AccessoryFamilies)
+            {
+                if (f == null || string.IsNullOrWhiteSpace(f.Name)) continue;
+                list.AddRange(ChoicesOf(f));
+            }
+            return list.OrderBy(c => c.DnMm)
+                .ThenBy(c => c.FamilyName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.TypeName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static List<EnergyValveChoice> ChoicesOf(CatalogFamily family)
+        {
+            var list = new List<EnergyValveChoice>();
+            if (family == null) return list;
+            foreach (var t in family.TypeNames)
+            {
+                var dn = EnergyValveDnOf(t);
+                if (dn.HasValue) list.Add(new EnergyValveChoice { Family = family, TypeName = t, DnMm = dn.Value, DnFromType = true });
+            }
+            if (list.Count == 0)
+            {
+                var dn = EnergyValveDnOf(family.Name);
+                if (dn.HasValue) list.Add(new EnergyValveChoice { Family = family, TypeName = family.TypeNames.FirstOrDefault(), DnMm = dn.Value });
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Energy valve per il DN, scelta automatica sul nome: tra le scelte del progetto quelle con
+        /// quel DN (nel tipo o nella famiglia); a parità vince chi ha <see cref="EnergyValvePreferredWord"/>
+        /// nel nome ("bac" tra +BAC e +MID). Null se per quel DN non c'è.
+        /// </summary>
+        public EnergyValveChoice EnergyValveChoiceFor(double dnMm)
         {
             if (dnMm <= 0) return null;
             var word = TextUtil.Fold(EnergyValvePreferredWord ?? string.Empty);
-            return AccessoryFamilies
-                .Where(f => f != null && !string.IsNullOrWhiteSpace(f.Name))
-                .Select(f => new { f, m = EnergyValveRx.Match(TextUtil.Fold(f.Name)) })
-                .Where(x => x.m.Success && Math.Abs(double.Parse(x.m.Groups[1].Value, CultureInfo.InvariantCulture) - dnMm) < 0.5)
-                .OrderBy(x => word.Length > 0 && TextUtil.Fold(x.f.Name).Contains(word) ? 0 : 1)
-                .ThenBy(x => x.f.Name, StringComparer.OrdinalIgnoreCase)
-                .Select(x => x.f)
+            return EnergyValveChoices()
+                .Where(c => Math.Abs(c.DnMm - dnMm) < 0.5)
+                .OrderBy(c => c.Has(word) ? 0 : 1)
+                .ThenByDescending(c => ChoicesOf(c.Family).Count) // la famiglia unica (molti tipi per DN) vince sulle vecchie per DN
+                .ThenBy(c => c.FamilyName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.TypeName, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
         }
 
-        /// <summary>DN per cui esiste una famiglia di energy valve nel progetto, in ordine crescente.</summary>
-        public List<double> EnergyValveDns()
+        /// <summary>Famiglia della energy valve automatica per il DN (null se non c'è).</summary>
+        public CatalogFamily EnergyValveFamilyFor(double dnMm)
         {
-            return AccessoryFamilies
-                .Select(f => EnergyValveRx.Match(TextUtil.Fold(f == null ? string.Empty : f.Name)))
-                .Where(m => m.Success)
-                .Select(m => double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
-                .Distinct().OrderBy(d => d).ToList();
+            var c = EnergyValveChoiceFor(dnMm);
+            return c == null ? null : c.Family;
         }
 
-        /// <summary>Energy valve del DN dato (scelta automatica sul nome); null se nel progetto non c'è la famiglia di quella misura.</summary>
+        /// <summary>DN per cui esiste una energy valve nel progetto, in ordine crescente.</summary>
+        public List<double> EnergyValveDns()
+        {
+            return EnergyValveChoices().Select(c => c.DnMm).Distinct().OrderBy(d => d).ToList();
+        }
+
+        /// <summary>Energy valve del DN dato (scelta automatica sul nome); null se nel progetto non c'è quella misura.</summary>
         public MepValve EnergyValveFor(double dnMm)
         {
-            return EnergyValveOf(EnergyValveFamilyFor(dnMm), dnMm);
+            return EnergyValveOf(EnergyValveChoiceFor(dnMm), dnMm);
         }
 
         /// <summary>
         /// Energy valve del circuito: la famiglia scelta dall'utente nella riga, se c'è ed è caricata;
         /// altrimenti quella fissata per fascia di DN in <see cref="EnergyValveMap"/>; altrimenti
-        /// quella automatica sul nome per il DN prima del bypass.
+        /// quella automatica sul nome per il DN prima del bypass. Dentro una famiglia con un tipo per
+        /// DN si prende il tipo del DN del circuito; se manca, il più grande tra quelli più piccoli
+        /// (poi riduzioni), altrimenti il più piccolo.
         /// </summary>
         public MepValve EnergyValveFor(ManifoldCircuit circuit)
         {
             if (circuit == null) return null;
-            var chosen = LoadedFamily(circuit.EnergyValveFamily) ?? LoadedFamily(EnergyValveMap.Resolve(circuit.DnMm));
-            if (chosen != null) return EnergyValveOf(chosen, circuit.DnMm);
+            var inRow = LoadedFamily(circuit.EnergyValveFamily);
+            if (inRow != null)
+            {
+                // tipo esplicitato nella riga (famiglia unica con un tipo per DN): vince sul DN del circuito
+                var type = string.IsNullOrWhiteSpace(circuit.EnergyValveType) ? null
+                    : inRow.TypeNames.FirstOrDefault(t => string.Equals(t, circuit.EnergyValveType.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (type != null)
+                {
+                    var dn = EnergyValveDnOf(type);
+                    return EnergyValveOf(new EnergyValveChoice { Family = inRow, TypeName = type, DnMm = dn ?? circuit.DnMm, DnFromType = dn.HasValue }, circuit.DnMm);
+                }
+                return EnergyValveOf(ChoiceInFamily(inRow, circuit.DnMm), circuit.DnMm);
+            }
+            var chosen = LoadedFamily(EnergyValveMap.Resolve(circuit.DnMm));
+            if (chosen != null) return EnergyValveOf(ChoiceInFamily(chosen, circuit.DnMm), circuit.DnMm);
             return EnergyValveFor(circuit.DnMm);
+        }
+
+        /// <summary>La scelta migliore dentro una famiglia fissata dall'utente, per il DN del circuito.</summary>
+        private EnergyValveChoice ChoiceInFamily(CatalogFamily family, double dnMm)
+        {
+            var word = TextUtil.Fold(EnergyValvePreferredWord ?? string.Empty);
+            var choices = ChoicesOf(family)
+                .OrderBy(c => c.Has(word) ? 0 : 1)
+                .ThenBy(c => c.TypeName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (choices.Count == 0)
+            {
+                // famiglia senza DN nel nome né nei tipi: si monta com'è, primo tipo
+                return new EnergyValveChoice { Family = family, TypeName = family.TypeNames.FirstOrDefault(), DnMm = dnMm };
+            }
+            return choices.FirstOrDefault(c => Math.Abs(c.DnMm - dnMm) < 0.5)
+                   ?? choices.Where(c => c.DnMm < dnMm).OrderByDescending(c => c.DnMm).FirstOrDefault()
+                   ?? choices.OrderBy(c => c.DnMm).First();
         }
 
         /// <summary>Da dove viene la energy valve del circuito, per l'anteprima.</summary>
@@ -458,31 +582,42 @@ namespace SayRevit.Core.Model
                 string.Equals(f.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
         }
 
-        /// <summary>Tutte le famiglie di energy valve caricate (nome che inizia per "ev" + DN), per la tendina della riga.</summary>
+        /// <summary>
+        /// Tutte le famiglie di energy valve caricate (DN nel nome della famiglia o dei tipi), per la
+        /// tendina della riga: in ordine del DN più piccolo che offrono, poi per nome.
+        /// </summary>
         public List<CatalogFamily> EnergyValveFamilies()
         {
-            return AccessoryFamilies
-                .Where(f => f != null && EnergyValveRx.IsMatch(TextUtil.Fold(f.Name)))
-                .OrderBy(f => double.Parse(EnergyValveRx.Match(TextUtil.Fold(f.Name)).Groups[1].Value, CultureInfo.InvariantCulture))
-                .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+            return EnergyValveChoices()
+                .GroupBy(c => c.Family)
+                .OrderBy(g => g.Min(c => c.DnMm))
+                .ThenBy(g => g.Key.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key)
                 .ToList();
         }
 
-        /// <summary>DN dichiarato nel nome di una famiglia di energy valve; null se il nome non lo dice.</summary>
-        public static double? EnergyValveDnOf(string familyName)
+        /// <summary>DN dichiarato in un nome di famiglia o di tipo di energy valve ("ev025r2…", "EV025R2+BAC"); null se il nome non lo dice.</summary>
+        public static double? EnergyValveDnOf(string familyOrTypeName)
         {
-            var m = EnergyValveRx.Match(TextUtil.Fold(familyName ?? string.Empty));
+            var m = EnergyValveRx.Match(TextUtil.Fold(familyOrTypeName ?? string.Empty));
             return m.Success ? double.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture) : (double?)null;
         }
 
-        private MepValve EnergyValveOf(CatalogFamily family, double dnMm)
+        /// <summary>DN dichiarato dal pezzo: prima nel nome del tipo, poi in quello della famiglia.</summary>
+        public static double? EnergyValveDnOf(MepValve ev)
         {
-            if (family == null) return null;
+            if (ev == null) return null;
+            return EnergyValveDnOf(ev.TypeName) ?? EnergyValveDnOf(ev.FamilyName);
+        }
+
+        private MepValve EnergyValveOf(EnergyValveChoice choice, double dnMm)
+        {
+            if (choice == null || choice.Family == null) return null;
             return new MepValve
             {
                 Kind = ValveKind.EnergyValve,
-                FamilyName = family.Name,
-                TypeName = family.TypeNames.FirstOrDefault(),
+                FamilyName = choice.Family.Name,
+                TypeName = choice.TypeName,
                 DnMm = dnMm,
                 WithFlanges = false, // attacchi filettati (R2)
                 RollDegrees = Mix2RollDegrees
@@ -503,6 +638,71 @@ namespace SayRevit.Core.Model
         /// (girato di 180° attorno alla normale al tubo): la Y guarda verso il collettore.
         /// </summary>
         public bool StrainerReversed { get; set; } = true;
+
+        /// <summary>Rotazione della pompa attorno all'asse del tubo (gradi): decide da che parte esce il motore.</summary>
+        public double PumpRollDegrees { get; set; } = 90;
+
+        /// <summary>True = pompa montata col verso invertito rispetto alla famiglia (girata di 180° attorno alla normale al tubo).</summary>
+        public bool PumpReversed { get; set; }
+
+        private static readonly Regex PumpFlangedRx = new Regex(@"(?<![A-Za-z0-9])F(?![A-Za-z0-9])");
+
+        /// <summary>True se il modello di pompa è flangiato ("MAGNA3 32-40 F PN6"): si monta tra due flange.</summary>
+        public static bool PumpTypeIsFlanged(string typeName)
+        {
+            return !string.IsNullOrWhiteSpace(typeName) && PumpFlangedRx.IsMatch(typeName);
+        }
+
+        /// <summary>DN dello stacco dove sta la pompa: dopo il bypass nel mix 2 vie, il DN del circuito altrimenti.</summary>
+        public double PumpDnFor(ManifoldCircuit circuit)
+        {
+            return circuit.KindInfo.IsChainModelled ? circuit.EffectiveDnAfterBypassMm : circuit.DnMm;
+        }
+
+        /// <summary>Famiglia della pompa per il DN del circuito (base o soglia); null se non scelta.</summary>
+        public string PumpFamilyFor(ManifoldCircuit circuit)
+        {
+            var family = FamilyMaps[ManifoldElements.Pump].Resolve(PumpDnFor(circuit));
+            return string.IsNullOrWhiteSpace(family) ? null : family.Trim();
+        }
+
+        /// <summary>Modelli (tipi) della famiglia della pompa per il DN: le voci della tendina della riga.</summary>
+        public List<string> PumpTypeNames(double dnMm)
+        {
+            var map = FamilyMaps[ManifoldElements.Pump];
+            var family = map.Resolve(dnMm > 0 ? dnMm : 1);
+            if (string.IsNullOrWhiteSpace(family)) return new List<string>();
+            return TypesFor(family, map, ElementTypes[ManifoldElements.Pump]).ToList();
+        }
+
+        /// <summary>
+        /// Pompa del circuito: il modello scelto nella riga dentro la famiglia della pompa, sul DN
+        /// dello stacco dove sta; null senza modello, senza famiglia o se il modello non è tra i tipi.
+        /// I modelli flangiati ("F") vanno tra due flange; rotazione e verso dalle impostazioni.
+        /// </summary>
+        public MepValve PumpFor(ManifoldCircuit circuit)
+        {
+            if (circuit == null || !circuit.KindInfo.HasPump || string.IsNullOrWhiteSpace(circuit.PumpType)) return null;
+            var dn = PumpDnFor(circuit);
+            if (dn <= 0) return null;
+            var map = FamilyMaps[ManifoldElements.Pump];
+            var family = PumpFamilyFor(circuit);
+            if (family == null) return null;
+            var type = TypesFor(family, map, ElementTypes[ManifoldElements.Pump])
+                .FirstOrDefault(t => string.Equals(t, circuit.PumpType.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (type == null) return null;
+            return new MepValve
+            {
+                Kind = ValveKind.Pump,
+                FamilyName = family,
+                TypeName = type,
+                DnMm = dn,
+                PnBar = ValvePnBar,
+                WithFlanges = PumpTypeIsFlanged(type),
+                RollDegrees = PumpRollDegrees,
+                Reversed = PumpReversed
+            };
+        }
 
         /// <summary>Filtro a Y del DN dato (flange proprie della famiglia); null senza famiglia scelta.</summary>
         public MepValve StrainerFor(double dnMm)
@@ -542,7 +742,7 @@ namespace SayRevit.Core.Model
                 TypeName = pick == null ? null : pick.TypeName,
                 DnMm = dnMm,
                 PnBar = ValvePnBar,
-                WithFlanges = element.WithFlanges,
+                WithFlanges = element.FlangesFor(family), // le famiglie filettate (R60) senza flange automatiche
                 RollDegrees = Mix2RollDegrees,
                 PreferredTypeWord = element.TypeWord
             };
@@ -600,6 +800,26 @@ namespace SayRevit.Core.Model
             var shutoff = ValveFor(dn);
             chain.Add(StubItem.Of(shutoff, ValveAxisDistanceMm));
 
+            if (!circuit.KindInfo.IsChainModelled)
+            {
+                // diretto / mix 3 vie con pompa: solo sulla mandata, intercettazione → pompa (→ valvola di
+                // zona); sul ritorno resta la sola intercettazione (catena vuota = stacco semplice).
+                // La valvola a 3 vie e il bypass del mix 3 vie non sono ancora modellati: la pompa
+                // segue l'intercettazione, e si sposterà dopo il bypass quando ci sarà.
+                if (!supply) { chain.Clear(); return chain; }
+                var pump = PumpFor(circuit);
+                if (pump == null) { chain.Clear(); return chain; }
+                chain.Add(StubItem.Gap(Gap(Mix2GapMm)));
+                chain.Add(StubItem.Of(pump));
+                var zoneAfterPump = circuit.EffectiveWithZoneValve ? ZoneValveFor(dn) : null;
+                if (zoneAfterPump != null)
+                {
+                    chain.Add(StubItem.Gap(Gap(Mix2GapMm)));
+                    chain.Add(StubItem.Of(zoneAfterPump));
+                }
+                return chain;
+            }
+
             if (supply)
             {
                 if (CanBuildBypass)
@@ -608,7 +828,10 @@ namespace SayRevit.Core.Model
                     chain.Add(StubItem.TeeFor("T del bypass (uscita verso il ritorno)", dnAfter));
                 }
                 chain.Add(StubItem.Gap(Gap(Mix2GapMm)));
-                chain.Add(StubItem.Gap(Gap(Mix2PumpSpaceMm), "spazio riservato alla pompa"));
+                // la pompa dopo il bypass: il modello scelto nella riga, altrimenti resta lo spazio riservato
+                var pump = PumpFor(circuit);
+                if (pump != null) chain.Add(StubItem.Of(pump));
+                else chain.Add(StubItem.Gap(Gap(Mix2PumpSpaceMm), "spazio riservato alla pompa"));
                 chain.Add(StubItem.Gap(Gap(Mix2GapMm)));
             }
             else
@@ -662,7 +885,7 @@ namespace SayRevit.Core.Model
         /// <summary>Bypass del circuito verso lo stacco gemello; null se non si può costruire.</summary>
         public MepBypass BypassFor(ManifoldCircuit circuit, int index, bool supply)
         {
-            if (!HasChain(circuit) || !CanBuildBypass) return null;
+            if (!HasChain(circuit) || !circuit.KindInfo.IsChainModelled || !CanBuildBypass) return null;
             var sign = supply ? 1 : -1;
             return new MepBypass
             {
@@ -1074,6 +1297,7 @@ namespace SayRevit.Core.Model
             }
 
             CollectMixTwoWayMessages(circuits, result);
+            CollectPumpMessages(circuits, result);
 
             var noPump = circuits.Where(c => c.KindInfo.UsesPipeAfterValve).ToList();
             if (noPump.Any(c => PipeAfterValveFor(c).HasValue))
@@ -1095,15 +1319,55 @@ namespace SayRevit.Core.Model
             // le tipologie la cui catena non è ancora modellata: dichiarate, non taciute
             var declared = circuits.Where(c => !c.KindInfo.IsChainModelled).ToList();
             var pending = new List<string>();
-            if (declared.Any(c => c.KindInfo.HasPump)) pending.Add("pompe");
+            if (declared.Any(c => c.KindInfo.HasPump && PumpFor(c) == null)) pending.Add("pompe (nessun modello scelto nella riga)");
             if (declared.Any(c => c.Kind == CircuitKind.MixThreeWay)) pending.Add("valvole miscelatrici a 3 vie");
             if (declared.Any(c => c.KindInfo.HasBypass)) pending.Add("bypass mandata/ritorno");
-            var zoneElsewhere = declared.Where(c => c.EffectiveWithZoneValve).ToList();
+            var zoneElsewhere = declared.Where(c => c.EffectiveWithZoneValve && !HasPumpChain(c)).ToList();
             if (zoneElsewhere.Count > 0)
                 pending.Add("valvole di zona su " + string.Join(", ", zoneElsewhere.Select(c => CircuitLabel(c, circuits.IndexOf(c)))));
             if (pending.Count > 0)
                 result.Warnings.Add("Tipologie: " + string.Join(", ", pending) +
-                                    " non ancora modellati in Revit; sugli stacchi viene inserita solo l'intercettazione.");
+                                    " non ancora modellati in Revit; sugli stacchi viene inserita solo l'intercettazione (e la pompa, se scelta).");
+        }
+
+        /// <summary>Pompe: per ogni circuito con pompa, il modello che verrà montato e dove, oppure perché manca.</summary>
+        private void CollectPumpMessages(List<ManifoldCircuit> circuits, ParseResult result)
+        {
+            foreach (var c in circuits)
+            {
+                if (!c.KindInfo.HasPump) continue;
+                var label = CircuitLabel(c, circuits.IndexOf(c));
+                if (string.IsNullOrWhiteSpace(c.PumpType)) continue;
+                var family = PumpFamilyFor(c);
+                if (family == null)
+                {
+                    result.Warnings.Add(label + ": modello di pompa \"" + c.PumpType + "\" scelto ma nessuna famiglia della pompa in \"Mostra di più\": stacco senza pompa.");
+                    continue;
+                }
+                var pump = PumpFor(c);
+                if (pump == null)
+                {
+                    result.Warnings.Add(label + ": modello di pompa \"" + c.PumpType + "\" non trovato nella famiglia \"" + family + "\": stacco senza pompa.");
+                    continue;
+                }
+                if (ValveFor(c.DnMm) == null)
+                {
+                    result.Warnings.Add(label + ": pompa \"" + pump.TypeName + "\" senza valvola di intercettazione: la catena parte dall'intercettazione, quindi la pompa non viene montata.");
+                    continue;
+                }
+                var where = c.KindInfo.IsChainModelled
+                    ? "sulla mandata dopo il T del bypass"
+                    : c.Kind == CircuitKind.MixThreeWay
+                        ? "sulla mandata dopo l'intercettazione (valvola a 3 vie e bypass non ancora modellati: la pompa seguirà il bypass quando ci sarà)"
+                        : "sulla mandata dopo l'intercettazione";
+                var typeDn = ValveTypeMatcher.DnFromTypeName(pump.TypeName);
+                result.Notes.Add(label + " DN" + MepSize.Fmt(pump.DnMm) + " → pompa \"" + pump.TypeName + "\" (famiglia \"" + pump.FamilyName + "\") " + where +
+                                 (pump.WithFlanges ? ", tra due flange" : ", attacchi filettati") +
+                                 (typeDn.HasValue && Math.Abs(typeDn.Value - pump.DnMm) > 0.5
+                                     ? "; modello DN" + MepSize.Fmt(typeDn.Value) + " su stacco DN" + MepSize.Fmt(pump.DnMm) + ": riduzioni prima e dopo"
+                                     : string.Empty) +
+                                 "; rotazione " + MepSize.Fmt(PumpRollDegrees) + "°" + (PumpReversed ? ", verso invertito" : "") + ".");
+            }
         }
 
         /// <summary>
@@ -1127,7 +1391,7 @@ namespace SayRevit.Core.Model
             result.Notes.Add("Mix 2 vie: tubo libero " + MepSize.Fmt(Gap(Mix2GapMm)) + " mm tra i pezzi e attorno ai T, " +
                              MepSize.Fmt(Gap(Mix2FlangedGapMm)) + " mm tra filtro, valvola di zona e intercettazione (mai meno di " +
                              MepSize.Fmt(Mix2MinGapMm) + " mm di tubo diritto tra due elementi); spazio per la pompa " + MepSize.Fmt(Gap(Mix2PumpSpaceMm)) +
-                             " mm (famiglia non ancora disponibile); tubo finale " + MepSize.Fmt(Mix2EndPipeMm) +
+                             " mm nelle righe senza modello di pompa; tubo finale " + MepSize.Fmt(Mix2EndPipeMm) +
                              " mm dopo l'intercettazione in cima; accessori girati di " + MepSize.Fmt(Mix2RollDegrees) + "°.");
             if (!WithReturn)
                 result.Warnings.Add("Mix 2 vie senza collettore di ritorno: il bypass non ha lo stacco gemello e non viene costruito.");
@@ -1173,7 +1437,7 @@ namespace SayRevit.Core.Model
                                         "); scegline una nella riga o il ritorno resta senza valvola a 2 vie.");
                     continue;
                 }
-                var evDn = EnergyValveDnOf(ev.FamilyName);
+                var evDn = EnergyValveDnOf(ev);
                 result.Notes.Add(label + " DN" + MepSize.Fmt(c.DnMm) + " → energy valve \"" + ev.FamilyName + "\" tipo \"" + ev.TypeName + "\"" +
                                  " (" + EnergyValveSourceOf(c) + ")" +
                                  "; sopra di essa tubo rettilineo di " + MepSize.Fmt(EnergyValveStraightMm(EnergyValveStraightDn(ev, c.DnMm))) + " mm (" +
@@ -1365,11 +1629,16 @@ namespace SayRevit.Core.Model
             branch.PositionsMm.Add(positionMm);
             if (HasChain(circuit))
             {
-                // mix 2 vie: la catena completa (la prima voce è la stessa intercettazione di Valve)
+                // mix 2 vie: la catena completa; diretto / mix 3 vie con pompa: intercettazione → pompa
+                // sulla mandata (la prima voce è la stessa intercettazione di Valve). Catena vuota
+                // (ritorno di un diretto con pompa) = stacco semplice con la sola valvola.
                 var chain = ChainFor(circuit, supply);
-                if (chain.Count > 0 && chain[0].Piece != null) chain[0].Piece = branch.Valve;
-                branch.Chain.AddRange(chain);
-                branch.Bypass = BypassFor(circuit, index, supply);
+                if (chain.Count > 1)
+                {
+                    if (chain[0].Piece != null) chain[0].Piece = branch.Valve;
+                    branch.Chain.AddRange(chain);
+                    branch.Bypass = BypassFor(circuit, index, supply);
+                }
             }
             return branch;
         }
@@ -1463,7 +1732,8 @@ namespace SayRevit.Core.Model
 
         /// <summary>
         /// "25:mix2|out=32|ev=ev025r2+bac_(1)": DN e tipologia, poi solo i campi che si discostano
-        /// dal predefinito (DN dopo il bypass, famiglia della energy valve scelta a mano).
+        /// dal predefinito (DN dopo il bypass, famiglia della energy valve scelta a mano e, per la
+        /// famiglia unica, il tipo "evt=EV025R2+BAC").
         /// </summary>
         public static string CircuitToString(ManifoldCircuit c)
         {
@@ -1471,7 +1741,13 @@ namespace SayRevit.Core.Model
             if (c.DnAfterBypassMm > 0 && Math.Abs(c.DnAfterBypassMm - c.DnMm) > 0.001)
                 s += "|out=" + c.DnAfterBypassMm.ToString("0.##", CultureInfo.InvariantCulture);
             if (!string.IsNullOrWhiteSpace(c.EnergyValveFamily))
+            {
                 s += "|ev=" + c.EnergyValveFamily.Trim().Replace(";", string.Empty).Replace("|", string.Empty);
+                if (!string.IsNullOrWhiteSpace(c.EnergyValveType))
+                    s += "|evt=" + c.EnergyValveType.Trim().Replace(";", string.Empty).Replace("|", string.Empty);
+            }
+            if (c.KindInfo.HasPump && !string.IsNullOrWhiteSpace(c.PumpType))
+                s += "|pump=" + c.PumpType.Trim().Replace(";", string.Empty).Replace("|", string.Empty);
             // il cieco non ha la valvola di zona: la scelta non si salva
             if (!c.KindInfo.IsBlind && c.WithZoneValve.HasValue && c.WithZoneValve.Value != c.KindInfo.IsChainModelled)
                 s += "|zv=" + (c.WithZoneValve.Value ? "1" : "0");
@@ -1521,6 +1797,10 @@ namespace SayRevit.Core.Model
                     circuit.DnAfterBypassMm = n;
                 else if (key == "ev" && value.Length > 0)
                     circuit.EnergyValveFamily = value;
+                else if (key == "evt" && value.Length > 0)
+                    circuit.EnergyValveType = value;
+                else if (key == "pump" && value.Length > 0)
+                    circuit.PumpType = value;
                 else if (key == "zv")
                     circuit.WithZoneValve = value == "1" || value.Equals("true", StringComparison.OrdinalIgnoreCase);
             }

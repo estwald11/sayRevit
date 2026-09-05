@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Autodesk.Revit.DB;
@@ -60,6 +60,8 @@ namespace SayRevit.Addin.Revit
             c.PipeAccessories.AddRange(ReadFamilies(doc, BuiltInCategory.OST_PipeAccessory));
             if (c.PipeAccessories.Count == 0)
                 c.PipeAccessories.AddRange(ReadFamilies(doc, BuiltInCategory.OST_PipeFitting));
+            // pompe: attrezzature meccaniche
+            c.MechanicalEquipment.AddRange(ReadFamilies(doc, BuiltInCategory.OST_MechanicalEquipment));
 
             try
             {

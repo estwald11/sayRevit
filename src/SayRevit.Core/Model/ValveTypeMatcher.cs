@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -22,7 +22,9 @@ namespace SayRevit.Core.Model
         /// <summary>Filtro a Y flangiato.</summary>
         Strainer,
         /// <summary>Valvola di ritegno wafer sul bypass, tra due flange.</summary>
-        CheckValve
+        CheckValve,
+        /// <summary>Pompa di circolazione in linea (Grundfos MAGNA3), sulla mandata dopo il bypass.</summary>
+        Pump
     }
 
     /// <summary>Tipo di famiglia scelto per una valvola, con quello che si ricava dal suo nome.</summary>
@@ -52,6 +54,8 @@ namespace SayRevit.Core.Model
         private static readonly Regex DnRx = new Regex(@"dn\s*[-_]?\s*(\d+(?:[.,]\d+)?)", RegexOptions.IgnoreCase);
         private static readonly Regex PnRx = new Regex(@"pn\s*[-_]?\s*(\d+(?:[.,]\d+)?)", RegexOptions.IgnoreCase);
         private static readonly Regex BareRx = new Regex(@"(?<!\d)(\d{1,3})(?!\d)");
+        /// <summary>Codici Giacomini R60 ("R60Y002"): il numero conta lungo la serie DN commerciale a partire da DN10.</summary>
+        private static readonly Regex GiacominiR60Rx = new Regex(@"^\s*r60y0*(\d+)\b", RegexOptions.IgnoreCase);
 
         /// <summary>Corrispondenza pollici → DN commerciale (le misure che compaiono nei nomi dei tipi).</summary>
         private static readonly KeyValuePair<double, double>[] InchToDn =
@@ -90,12 +94,19 @@ namespace SayRevit.Core.Model
             var inches = InchesFromTypeName(typeName);
             if (inches.HasValue) return DnFromInches(inches.Value);
 
-            // Nome fatto di sole cifre (es. "40"): vale solo se è un DN commerciale,
-            // così i codici articolo ("48013978") non vengono scambiati per una misura.
-            var bare = BareRx.Match(typeName);
-            if (bare.Success && TryNumber(bare.Groups[1].Value, out var n) &&
-                ManifoldPlan.DnSeries.Any(d => Math.Abs(d - n) < 0.001))
-                return n;
+            // Giacomini R60: "R60Y002" = DN10, "R60Y003" = DN15, "R60Y004" = DN20… lungo la serie commerciale
+            var code = GiacominiR60Rx.Match(typeName);
+            if (code.Success && int.TryParse(code.Groups[1].Value, out var idx) && idx >= 2 && idx - 2 < ManifoldPlan.DnSeries.Length)
+                return ManifoldPlan.DnSeries[idx - 2];
+
+            // Numero nudo (es. "40", o il 25 di "MAGNA3 25-60 PN10"): vale il primo che è un DN
+            // commerciale, così i codici articolo ("48013978") e i suffissi ("MAGNA3") non vengono
+            // scambiati per una misura.
+            foreach (Match bare in BareRx.Matches(typeName))
+            {
+                if (TryNumber(bare.Groups[1].Value, out var n) && ManifoldPlan.DnSeries.Any(d => Math.Abs(d - n) < 0.001))
+                    return n;
+            }
 
             return null;
         }

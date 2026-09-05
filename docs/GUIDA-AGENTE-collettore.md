@@ -1,4 +1,4 @@
-# Guida per l'agente: il collettore di sayRevit
+﻿# Guida per l'agente: il collettore di sayRevit
 
 Questa guida serve a chi (persona o agente) deve **modificare o estendere il collettore**:
 aggiungere un elemento, una tipologia di circuito, un parametro, oppure riprodurre in Revit un
@@ -27,7 +27,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -RevitVe
 
 | Dove | Cosa | Quando si tocca |
 | --- | --- | --- |
-| `Core/Model/ManifoldElements.cs` | **Registro degli elementi** (sfera, boax, energy valve, zona, filtro, ritegno): chiave, `ValveKind`, etichette, parole per proporre la famiglia, flange, sezione del pannello, chiave nelle impostazioni | Nuovo accessorio |
+| `Core/Model/ManifoldElements.cs` | **Registro degli elementi** (sfera, boax, energy valve, zona, filtro, ritegno, pompa): chiave, `ValveKind`, etichette, parole per proporre la famiglia, flange, sezione del pannello, chiave nelle impostazioni, `FromMechanicalEquipment` (pompe: categoria "Attrezzatura meccanica"), `NoFlangeHints` (famiglie filettate senza flange automatiche), `DefaultThresholds` (soglie proposte, es. ritegno: R60 fino a DN32, boa-rvk da DN40) | Nuovo accessorio |
 | `Core/Model/FamilyByDn.cs` | Famiglia per diametro: base + soglie "da DN x in su usa y"; forma salvata `fam\|40=altra` | Quasi mai |
 | `Core/Model/CircuitKind.cs` | Tipologie di circuito (`CircuitKind`, `CircuitKindInfo`: codice, componenti di mandata/ritorno, flag `HasBypass`, `IsChainModelled`…) | Nuova tipologia |
 | `Core/Model/ManifoldPlan.cs` | **Il piano**: parametri in mm, `ChainFor` (ricetta della catena), `BypassFor`, `PieceFor`, `ValveFor`, `DescribeChain`, messaggi dell'anteprima (`Collect…Messages`), serializzazione dei circuiti (`CircuitToString`/`ParseCircuit`), interasse automatico | Ordine dei pezzi, distanze, nuove regole |
@@ -147,6 +147,18 @@ L'agente può leggere immagini con lo strumento Read (PNG/JPG). Procedura:
 ## 5. Cose note da non riscoprire
 
 - Tra due elementi ci sono sempre almeno 50 mm di tubo (`Mix2MinGapMm`).
+- La pompa (Grundfos MAGNA3, attrezzatura meccanica, un tipo per modello "MAGNA3 25-60 PN10 - …") ha la famiglia
+  nel registro e il **modello per circuito** in `ManifoldCircuit.PumpType` (`|pump=` nelle impostazioni). `PumpFor`
+  la monta sulla mandata: nel mix 2 vie al posto dello spazio riservato dopo il T del bypass; nel diretto e nel mix 3 vie
+  con la catena corta intercettazione → pompa (→ zona) (`HasPumpChain`), ritorno senza catena. I modelli "F" vanno tra
+  due flange; rotazione e verso da `PumpRollDegrees`/`PumpReversed`.
+- La energy valve Belimo è una famiglia unica (`Belimo_EV…R2_BAC_RFA_2027_LevelBased`) con un tipo per
+  DN (`EV015R2+BAC` … `EV050R2+BAC`): il DN si legge dal nome del tipo (`EnergyValveChoices` in
+  `ManifoldPlan`); le vecchie famiglie per DN (`ev025r2…`) restano riconosciute dal nome della famiglia.
+- Il **tubo libero** (i `Gap` della catena, incluso il tratto rettilineo dopo la energy valve) deve essere tubo e
+  basta: il builder lo conta oltre la geometria che il pezzo ha fuori dai connettori (`Assembly.OverhangFarMm`,
+  es. il sensore Belimo, 150 mm) e mette il T del bypass oltre il tratto libero di tutto lo spazio che il T e la
+  sua riduzione automatica consumano (`MeasureTeeRoomMm`, misurato al banco). Niente raccordi dentro il tratto.
 - La energy valve Belimo vuole a monte un tratto rettilineo di 5×Øint del tubo **adiacente** (se è più
   piccola dello stacco, il tratto corto della sua misura, prima della riduzione).
 - Le famiglie Belimo DN50 hanno un solo connettore idraulico: il pezzo si collega da un lato e
@@ -155,7 +167,9 @@ L'agente può leggere immagini con lo strumento Read (PNG/JPG). Procedura:
   riduzioni si fanno con `MakeTransition` e un tratto corto della misura del pezzo (`AdapterMm`).
 - Famiglie level-based su stacchi verticali vengono saltate con avviso; il caricatore prova a
   convertirle in work-plane-based una volta sola e riporta l'errore vero.
-- Il filtro Watts Y33P esiste da DN40: per DN minori serve un'altra famiglia (soglia "per DN…").
+- Filtro a Y predefinito: IMI TA-STR filettato (`IMI_TA-STR_RFA_2027_LevelBased`, tipi `43250-000315 DN15`…) fino a DN32,
+  da DN40 `VIR_895_RFA_2027_LevelBased` (tipi `895 DN40`…) wafer tra due flange automatiche come la boax
+  (`WithFlanges` vero; `NoFlangeHints` esclude TA-STR e Watts Y33P, che hanno le flange proprie).
 - I T e i gomiti vengono dalle preferenze di instradamento del tipo di tubazione; "Acc nero
   saldare" ha Bogen, Abzweigung, Übergang, Flansch, Enddeckel.
 - Il banco è muto se Revit ha un dialogo aperto o un comando attivo (Esc, poi in primo piano).

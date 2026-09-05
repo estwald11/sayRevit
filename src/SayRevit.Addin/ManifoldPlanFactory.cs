@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using SayRevit.Core.Model;
 
@@ -43,7 +43,9 @@ namespace SayRevit.Addin
                 Mix2EndPipeMm = settings.ManifoldMix2EndPipeMm,
                 Mix2RollDegrees = settings.ManifoldMix2RollDeg,
                 StrainerRollDegrees = settings.ManifoldStrainerRollDeg,
-                StrainerReversed = settings.ManifoldStrainerReversed
+                StrainerReversed = settings.ManifoldStrainerReversed,
+                PumpRollDegrees = settings.ManifoldPumpRollDeg,
+                PumpReversed = settings.ManifoldPumpReversed
             };
             // famiglie per DN di ogni elemento: base + soglie; valgono solo le famiglie caricate in QUESTO progetto
             foreach (var element in ManifoldElements.All)
@@ -52,7 +54,7 @@ namespace SayRevit.Addin
                 LoadMap(map, settings.Family(element.Key), catalog);
                 plan.ElementTypes[element.Key].AddRange(TypesOf(map.Default, catalog));
             }
-            plan.AccessoryFamilies.AddRange(catalog.PipeAccessories);
+            plan.AccessoryFamilies.AddRange(catalog.AllAccessories);
 
             var type = catalog.PipeTypes.FirstOrDefault(t => t.Name == plan.PipeTypeName) ?? catalog.PipeTypes.FirstOrDefault();
             if (type != null)
@@ -91,14 +93,14 @@ namespace SayRevit.Addin
         private static string FamilyOrNull(string name, ModelCatalog catalog)
         {
             if (string.IsNullOrWhiteSpace(name) || IsNone(name)) return null;
-            var found = catalog.PipeAccessories.FirstOrDefault(f => string.Equals(f.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
+            var found = catalog.AllAccessories.FirstOrDefault(f => string.Equals(f.Name, name.Trim(), StringComparison.OrdinalIgnoreCase));
             return found == null ? null : found.Name;
         }
 
         private static string[] TypesOf(string family, ModelCatalog catalog)
         {
             if (family == null) return new string[0];
-            var found = catalog.PipeAccessories.FirstOrDefault(f => string.Equals(f.Name, family, StringComparison.OrdinalIgnoreCase));
+            var found = catalog.AllAccessories.FirstOrDefault(f => string.Equals(f.Name, family, StringComparison.OrdinalIgnoreCase));
             return found == null ? new string[0] : found.TypeNames.ToArray();
         }
     }

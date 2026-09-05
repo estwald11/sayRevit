@@ -1,4 +1,4 @@
-# sayRevit
+﻿# sayRevit
 
 Autodesk Revit add-in that creates MEP piping from structured input, using the pipe types,
 system types and levels already loaded in the project. Two modes:
@@ -43,17 +43,19 @@ runs in a single transaction (one Undo step), and created elements are selected 
   *Tra pezzi flangiati*, 50 mm, between strainer, zone valve and top shut-off; **never less than
   50 mm of straight pipe between two elements**), and the stub ends with a short pipe after the
   top shut-off (*Tubo finale*, 100 mm). Supply stub: shut-off → tee →
-  reserved **pump space** (400 mm of plain pipe, no pump family yet) → zone valve between flanges →
+  the **pump** chosen per row (Grundfos MAGNA3 type; without a model, 400 mm of reserved plain pipe) → zone valve between flanges →
   second shut-off. Return stub: shut-off → **Belimo Energy Valve** → tee → **Y strainer** → zone
   valve → second shut-off. Each circuit row with a bypass (mix 2 vie, mix 3 vie) has a **DN dopo
   bypass** field: the DN on the left is the one before the bypass (header side, used to size the
   header and the first shut-off and energy valve); the bypass, every piece after the tee and the
   top shut-off take the DN after the bypass, through a reducing tee. Families: the energy valve is
-  one family per DN, picked per circuit from a dropdown in the row (default *automatica sul DN*:
-  `ev025r2…`, `ev032r2…`, `ev050r2…`, preferring `+BAC`; a family of another DN is accepted with a
-  warning; the DN50 families have a single pipe connector, so they are connected on one side and the
-  other end is read from the pipe body geometry); the zone valve (Watts Sylax wafer, type `DNxx -
-  Ductile Iron` preferred), the strainer (Watts Y33P from DN40, or any other loaded family; it has
+  picked per circuit from a dropdown in the row (default *automatica sul DN*: the DN is read from
+  the type name, `EV015R2+BAC` … `EV050R2+BAC` in the single Belimo 2027 family
+  `Belimo_EV…R2_BAC_RFA_2027_LevelBased`, or from the family name of the old one-family-per-DN
+  set `ev025r2…`, preferring `+BAC`; a type/family of another DN is accepted with a warning; the
+  DN50 valves have a single pipe connector, so they are connected on one side and the other end
+  is read from the pipe body geometry); the zone valve (Watts Sylax wafer, type `DNxx -
+  Ductile Iron` preferred), the strainer (IMI TA-STR threaded up to DN32, VIR 895 wafer between two automatic flanges from DN40 by default; Watts Y33P from DN40, or any other loaded family; it has
   its own rotation field and is mounted flipped by default, *Filtro a Y capovolto*) and the check
   valve (KSB BOA-RVK wafer) are chosen in **Mostra di più**. **Every element is customisable per
   diameter**: each family dropdown (ball valve, boax, energy valve, zone valve, strainer, check

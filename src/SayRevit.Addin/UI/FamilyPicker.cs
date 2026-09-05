@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
@@ -42,28 +42,38 @@ namespace SayRevit.Addin.UI
             var choices = new List<string> { _none };
             if (element.AutoByName)
             {
-                // energy valve: prima le famiglie riconosciute dal nome (ev025r2…), poi le altre
+                // energy valve: prima le famiglie riconosciute dal nome dei tipi (EV025R2+BAC) o proprio (ev025r2…), poi le altre
                 var probe = new ManifoldPlan();
-                probe.AccessoryFamilies.AddRange(catalog.PipeAccessories);
+                probe.AccessoryFamilies.AddRange(catalog.AllAccessories);
                 choices.AddRange(probe.EnergyValveFamilies().Select(f => f.Name));
             }
-            choices.AddRange(catalog.PipeAccessories.Select(f => f.Name).Where(n => !choices.Contains(n)));
+            // pompe: prima le attrezzature meccaniche, poi (per chi le ha messe lì) gli accessori
+            var pool = element.FromMechanicalEquipment
+                ? catalog.MechanicalEquipment.Concat(catalog.PipeAccessories).ToList()
+                : catalog.PipeAccessories.ToList();
+            choices.AddRange(pool.Select(f => f.Name).Where(n => !choices.Contains(n)));
             foreach (var c in choices) Combo.Items.Add(c);
             Combo.SelectedIndex = 0;
             Combo.ToolTip = element.Tooltip;
             Combo.Width = element.UiWidth;
             Combo.VerticalAlignment = VerticalAlignment.Center;
 
-            // proposta sul nome: la prima famiglia che contiene una delle parole del registro
-            foreach (var f in catalog.PipeAccessories)
-            {
-                var name = TextUtil.Fold(f.Name);
-                if (!element.Hints.Any(h => name.Contains(h))) continue;
-                Combo.SelectedItem = f.Name;
-                break;
-            }
+            // proposta sul nome: le parole del registro in ordine di preferenza, la prima famiglia che ne contiene una
+            var byHint = FirstByHints(pool, element.Hints);
+            if (byHint != null) Combo.SelectedItem = byHint.Name;
 
             Rules = new DnRulesButton(element.Label, choices, _none, () => SelectedFamily);
+
+            // soglie proposte dal registro (ritegno: da DN40 la boa-rvk), solo con una famiglia diversa dalla base;
+            // valgono finché non c'è nulla di salvato (Load le sostituisce)
+            var proposed = new List<FamilyRule>();
+            foreach (var t in element.DefaultThresholds)
+            {
+                var f = FirstByHints(pool, t.Hints);
+                if (f == null || string.Equals(f.Name, SelectedFamily, StringComparison.OrdinalIgnoreCase)) continue;
+                proposed.Add(new FamilyRule(t.FromDnMm, f.Name));
+            }
+            if (proposed.Count > 0) Rules.SetRules(proposed);
 
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 12, 6) };
             panel.Children.Add(new TextBlock { Text = element.UiLabel, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
@@ -73,6 +83,19 @@ namespace SayRevit.Addin.UI
 
             Combo.SelectionChanged += (s, e) => Raise();
             Rules.RulesChanged += (s, e) => Raise();
+        }
+
+        /// <summary>La prima famiglia che contiene una delle parole, provate nell'ordine dato; null se nessuna.</summary>
+        private static CatalogFamily FirstByHints(IEnumerable<CatalogFamily> pool, IEnumerable<string> hints)
+        {
+            var list = pool.ToList();
+            foreach (var hint in hints)
+            {
+                var h = TextUtil.Fold(hint);
+                var f = list.FirstOrDefault(x => TextUtil.Fold(x.Name).Contains(h));
+                if (f != null) return f;
+            }
+            return null;
         }
 
         /// <summary>Famiglia di base scelta; null con "(nessuna)"/"(automatica)".</summary>
@@ -109,7 +132,7 @@ namespace SayRevit.Addin.UI
         private List<string> TypesOf(string family)
         {
             if (string.IsNullOrWhiteSpace(family) || family == _none) return new List<string>();
-            var found = _catalog.PipeAccessories.FirstOrDefault(f => f.Name == family);
+            var found = _catalog.AllAccessories.FirstOrDefault(f => f.Name == family);
             return found == null ? new List<string>() : found.TypeNames;
         }
 

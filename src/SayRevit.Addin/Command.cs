@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -123,8 +124,19 @@ namespace SayRevit.Addin
             {
                 try
                 {
-                    uidoc.Selection.SetElementIds(report.CreatedIds);
-                    uidoc.ShowElements(report.CreatedIds);
+                    if (window.ManifoldMode)
+                    {
+                        // In modalità Collettore il collettore appena creato non deve restare selezionato:
+                        // si inquadra soltanto. ShowElements evidenzia gli elementi, quindi la selezione
+                        // si svuota subito dopo.
+                        uidoc.ShowElements(report.CreatedIds);
+                        uidoc.Selection.SetElementIds(new List<ElementId>());
+                    }
+                    else
+                    {
+                        uidoc.Selection.SetElementIds(report.CreatedIds);
+                        uidoc.ShowElements(report.CreatedIds);
+                    }
                 }
                 catch
                 {

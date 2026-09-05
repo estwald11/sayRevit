@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -546,7 +546,8 @@ namespace SayRevit.Addin.Revit
         {
             if (_accessorySymbols != null) return _accessorySymbols;
             _accessorySymbols = new List<FamilySymbol>();
-            foreach (var category in new[] { BuiltInCategory.OST_PipeAccessory, BuiltInCategory.OST_PipeFitting })
+            // accessori, raccordi e attrezzature meccaniche (pompe): tutto ciò che si monta in linea
+            foreach (var category in new[] { BuiltInCategory.OST_PipeAccessory, BuiltInCategory.OST_PipeFitting, BuiltInCategory.OST_MechanicalEquipment })
             {
                 try
                 {
@@ -591,6 +592,13 @@ namespace SayRevit.Addin.Revit
             public double Half;
             /// <summary>Spessore di una flangia (piedi); 0 senza flange.</summary>
             public double FlangeLength;
+            /// <summary>
+            /// Geometria del corpo che sporge oltre la faccia esterna dell'insieme, lato collettore /
+            /// lato utenza (mm): il tubo creato dal connettore la attraversa (es. il sensore della
+            /// energy valve Belimo, 150 mm oltre il connettore), quindi NON è tubo libero.
+            /// </summary>
+            public double OverhangNearMm;
+            public double OverhangFarMm;
 
             /// <summary>Dal centro del corpo alla faccia esterna dell'insieme (piedi).</summary>
             public double Reach
@@ -677,7 +685,48 @@ namespace SayRevit.Addin.Revit
                     }
                 }
             }
+            MeasureOverhang(asm, dir, pipeRadius);
             return asm;
+        }
+
+        /// <summary>
+        /// Quanto il corpo sporge oltre le facce dell'insieme lungo l'asse: si contano solo i vertici
+        /// vicini all'asse (entro due raggi e mezzo più 30 mm), così un attuatore di fianco non conta
+        /// e il sensore in linea della energy valve sì. Quel tratto lo attraversa il tubo: non è libero.
+        /// </summary>
+        private void MeasureOverhang(Assembly asm, XYZ dir, double pipeRadius)
+        {
+            asm.OverhangNearMm = 0;
+            asm.OverhangFarMm = 0;
+            try
+            {
+                var center = Midpoint(asm.Body);
+                var bodyR = EndConnectors(asm.Body).Select(SafeRadius).FirstOrDefault(r => r > 0);
+                var radius = Math.Max(bodyR, pipeRadius);
+                if (radius <= 0) radius = Units.MmToFt(25);
+                var limit = 2.5 * radius + Units.MmToFt(30);
+                var min = double.MaxValue;
+                var max = double.MinValue;
+                foreach (var v in Vertices(asm.Body))
+                {
+                    var rel = v - center;
+                    var along = rel.DotProduct(dir);
+                    var radial = (rel - dir * along).GetLength();
+                    if (radial > limit) continue;
+                    if (along < min) min = along;
+                    if (along > max) max = along;
+                }
+                if (min == double.MaxValue) return;
+                asm.OverhangNearMm = Math.Max(0, Units.FtToMm(-min - asm.Reach));
+                asm.OverhangFarMm = Math.Max(0, Units.FtToMm(max - asm.Reach));
+                if (asm.OverhangNearMm > 1 || asm.OverhangFarMm > 1)
+                    Diag("  geometria oltre le facce: " + PlanFormatter.Len(asm.OverhangNearMm) + " lato collettore, " +
+                         PlanFormatter.Len(asm.OverhangFarMm) + " lato utenza: il tubo la attraversa, non conta come tubo libero.");
+            }
+            catch
+            {
+                // solo misura: senza, si ragiona sui connettori
+            }
         }
 
         /// <summary>Porta l'insieme in posizione, corpo centrato in <paramref name="center"/>, sempre lungo l'asse.</summary>
@@ -990,10 +1039,22 @@ namespace SayRevit.Addin.Revit
 
                 if (item.Kind == StubItemKind.Tee)
                 {
-                    var pointMm = s.CursorMm + s.GapMm;
-                    if (pointMm - s.CursorMm < 5) pointMm = s.CursorMm + 5; // un minimo di tubo per poterlo spezzare
-                    if (s.PrevAdapter != null && pointMm - s.CursorMm < AdapterMm) pointMm = s.CursorMm + AdapterMm; // posto per la riduzione
+                    // Il raccordo a T consuma tubo su entrambi i lati del suo punto (e se lo stacco cambia
+                    // misura al T, Revit aggiunge da sé una riduzione tra il T e il tubo più piccolo):
+                    // quanto, si misura al banco con le misure vere. Il tubo libero richiesto prima del T
+                    // (s.GapMm: es. il tratto rettilineo dopo la energy valve) deve restare tubo e basta,
+                    // senza raccordi dentro: il punto del T sta oltre quel tratto di tutto lo spazio consumato.
+                    var afterSize = item.SizeAfterMm > 0 && Math.Abs(item.SizeAfterMm - s.Size.DiameterMm) > 0.5 ? MepSize.Round(item.SizeAfterMm, true) : s.Size;
+                    var branchSize = branch.Bypass != null && branch.Bypass.DnMm > 0 && Math.Abs(branch.Bypass.DnMm - afterSize.DiameterMm) > 0.5
+                        ? MepSize.Round(branch.Bypass.DnMm, true) : afterSize;
+                    var measured = MeasureTeeRoomMm(ctx, bench + dir * Units.MmToFt(4500), dir, s.Size, afterSize, branchSize, chainWhat);
+                    var roomMm = (measured.HasValue ? measured.Value : TeeRoomMm(s.Size, branch.Bypass)) + TeeMarginMm;
+                    var pointMm = s.CursorMm + s.GapMm + roomMm;
+                    if (s.PrevAdapter != null && pointMm - s.CursorMm < AdapterMm + roomMm) pointMm = s.CursorMm + AdapterMm + roomMm; // posto per la riduzione
                     var point = stubStart + dir * Units.MmToFt(pointMm);
+                    Diag("  catena: T del bypass a " + PlanFormatter.Len(pointMm) + " dall'asse: " + PlanFormatter.Len(s.GapMm) +
+                         " di tubo libero dopo l'elemento precedente, poi " + PlanFormatter.Len(roomMm) + " consumati dal T" +
+                         (measured.HasValue ? " (misurati al banco)" : " (stimati)") + ".");
 
                     MEPCurve before;
                     if (s.Pending != null)
@@ -1011,6 +1072,35 @@ namespace SayRevit.Addin.Revit
                         if (before == null) return;
                         connectStart(before, s.PendingStart, chainWhat);
                     }
+                    // Verifica sui connettori veri: una riduzione appena fatta (dopo il tratto di
+                    // adattamento) ha preso il suo; se al tubo "prima" resta meno di quanto il T
+                    // consuma, il T si sposta più avanti allungando quel tubo.
+                    var beforeEndC = FindNearestEnd(before, point);
+                    var beforeStartC = OtherEnd(before, beforeEndC);
+                    if (beforeEndC != null && beforeStartC != null)
+                    {
+                        var freeMm = Units.FtToMm(beforeStartC.Origin.DistanceTo(beforeEndC.Origin));
+                        if (freeMm < roomMm - 0.5)
+                        {
+                            var from = beforeStartC.Origin;
+                            var moved = from + dir * Units.MmToFt(roomMm);
+                            if (TrimCurve(before, from, moved))
+                            {
+                                Diag("  catena: T del bypass spostato da " + PlanFormatter.Len(pointMm) + " a " +
+                                     PlanFormatter.Len(Units.FtToMm((moved - stubStart).DotProduct(dir))) + " dall'asse: davanti al T c'erano " +
+                                     PlanFormatter.Len(freeMm) + " di tubo, ne servono " + PlanFormatter.Len(roomMm) +
+                                     (measured.HasValue ? " (misurati al banco)" : " (stimati)") + ".");
+                                point = moved;
+                                pointMm = Units.FtToMm((point - stubStart).DotProduct(dir));
+                            }
+                            else
+                            {
+                                WarnOnce(chainWhat + "davanti al T del bypass restano solo " + PlanFormatter.Len(freeMm) +
+                                         " di tubo e non si riesce ad allungarlo: il T potrebbe non riuscire.");
+                            }
+                        }
+                    }
+
                     // dopo il T lo stacco può cambiare misura (DN dopo il bypass): T ridotto
                     if (item.SizeAfterMm > 0 && Math.Abs(item.SizeAfterMm - s.Size.DiameterMm) > 0.5)
                     {
@@ -1093,12 +1183,12 @@ namespace SayRevit.Addin.Revit
                 if (item.CenterMm.HasValue && s.PrevPiece == null && built.Count == 0)
                     centerMm = item.CenterMm.Value; // prima intercettazione: centrata alla distanza dall'asse
                 else
-                    centerMm = s.CursorMm + s.GapMm + reachMm;
+                    centerMm = s.CursorMm + s.GapMm + asm.OverhangNearMm + reachMm; // la sporgenza sta oltre il tubo libero
                 var nearMm = centerMm - reachMm;
                 var farMm = centerMm + reachMm;
-                var direct = s.PrevPiece != null && s.PrevAdapter == null && !nearMismatch && nearMm - s.CursorMm < 1; // flangia contro flangia, nessun tubo
-                // tubo minimo prima del pezzo: qualche millimetro per crearlo, più il posto per le riduzioni
-                var required = (s.PrevPiece != null || s.PrevAdapter != null ? 5.0 : 0.0) + (s.PrevAdapter != null ? AdapterMm : 0) + (nearMismatch ? AdapterMm + 50 : 0);
+                var direct = s.PrevPiece != null && s.PrevAdapter == null && !nearMismatch && asm.OverhangNearMm < 1 && nearMm - s.CursorMm < 1; // flangia contro flangia, nessun tubo
+                // tubo minimo prima del pezzo: qualche millimetro per crearlo, più il posto per le riduzioni, più la sporgenza del pezzo
+                var required = (s.PrevPiece != null || s.PrevAdapter != null ? 5.0 : 0.0) + (s.PrevAdapter != null ? AdapterMm : 0) + (nearMismatch ? AdapterMm + 50 : 0) + asm.OverhangNearMm;
                 if (!direct && required > 0 && nearMm - s.CursorMm < required)
                 {
                     centerMm += required - (nearMm - s.CursorMm);
@@ -1240,7 +1330,7 @@ namespace SayRevit.Addin.Revit
 
                 s.PrevPiece = asm.Far;
                 s.PrevAdapter = null;
-                s.CursorMm = farMm;
+                s.CursorMm = farMm + asm.OverhangFarMm; // il tubo parte dalla faccia, ma è libero solo oltre la sporgenza
                 s.GapMm = 0;
                 s.Pending = null;
                 s.PendingStart = farFace;
@@ -1253,7 +1343,7 @@ namespace SayRevit.Addin.Revit
                     double following = 0;
                     for (var k = index + 1; k < branch.Chain.Count && branch.Chain[k].Kind == StubItemKind.Gap; k++)
                         following += branch.Chain[k].LengthMm;
-                    var adapterLenMm = Math.Max(AdapterMm, following);
+                    var adapterLenMm = Math.Max(AdapterMm, asm.OverhangFarMm + following); // sporgenza + tubo libero richiesto
                     var adapterEnd = farFace + dir * Units.MmToFt(adapterLenMm);
                     var adapter = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, farFace, adapterEnd, SizeOfRadius(farR), label);
                     if (adapter != null)
@@ -1265,7 +1355,9 @@ namespace SayRevit.Addin.Revit
                         s.CursorMm = farMm + adapterLenMm;
                         s.AbsorbedGapMm = following; // il tubo libero che segue è già in questo tratto
                         Diag("  catena: tratto di adattamento Ø" + MepSize.Fmt(Math.Round(Units.FtToMm(2 * farR))) + " mm lungo " +
-                             PlanFormatter.Len(adapterLenMm) + " dopo il pezzo, riduzione al tubo successivo.");
+                             PlanFormatter.Len(adapterLenMm) + " dopo il pezzo" +
+                             (asm.OverhangFarMm > 1 ? " (di cui " + PlanFormatter.Len(asm.OverhangFarMm) + " dentro la sporgenza del pezzo)" : "") +
+                             ", riduzione al tubo successivo.");
                     }
                 }
             }
@@ -1300,6 +1392,120 @@ namespace SayRevit.Addin.Revit
 
         /// <summary>Tratto corto della misura del pezzo, prima e dopo un pezzo più piccolo del tubo, su cui si innesta la riduzione (mm).</summary>
         private const double AdapterMm = 100;
+
+        /// <summary>
+        /// Tubo libero che deve restare davanti al T del bypass (mm): il raccordo taglia i tubi per
+        /// il proprio corpo, circa un diametro e un quarto della misura più grande tra stacco e
+        /// bypass, più un margine.
+        /// </summary>
+        private static double TeeRoomMm(MepSize stub, MepBypass bypass)
+        {
+            var dn = stub == null ? 50 : stub.DiameterMm;
+            if (bypass != null && bypass.DnMm > dn) dn = bypass.DnMm;
+            return Math.Ceiling(1.25 * dn + 20);
+        }
+
+        /// <summary>Tubo che deve restare comunque davanti al T oltre a quanto il raccordo consuma (mm).</summary>
+        private const double TeeMarginMm = 10;
+
+        private readonly Dictionary<string, double?> _teeRoomCache = new Dictionary<string, double?>();
+
+        /// <summary>
+        /// Misura al banco quanto tubo il T del bypass consuma dal suo punto verso il tubo "prima"
+        /// (mm): raccordo più l'eventuale riduzione che Revit aggiunge da sé quando i due tubi dello
+        /// stacco hanno misure diverse. Tre tubi di prova, il T, la lettura del connettore del tubo
+        /// "prima" dopo l'inserimento, poi via tutto. Null se la prova non riesce (si stima).
+        /// </summary>
+        private double? MeasureTeeRoomMm(RunContext ctx, XYZ at, XYZ dir, MepSize before, MepSize after, MepSize branchSize, string what)
+        {
+            var key = ctx.TypeId + "|" + before.DiameterMm + "|" + after.DiameterMm + "|" + branchSize.DiameterMm;
+            double? cached;
+            if (_teeRoomCache.TryGetValue(key, out cached)) return cached;
+
+            var side = XYZ.BasisZ.CrossProduct(dir);
+            if (side.GetLength() < 1e-6) side = XYZ.BasisY;
+            side = side.Normalize();
+            var len = Units.MmToFt(800);
+            var pipes = new List<MEPCurve>();
+            var fittings = new HashSet<ElementId>();
+            double? room = null;
+            try
+            {
+                var a = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, at - dir * len, at, before, what + "prova T: ");
+                var b = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, at, at + dir * len, after, what + "prova T: ");
+                var c = CreateCurve(MepKind.Pipe, ctx.SystemId, ctx.TypeId, ctx.Level.Id, at, at + side * len, branchSize, what + "prova T: ");
+                foreach (var pipe in new[] { a, b, c }) if (pipe != null) pipes.Add(pipe);
+                if (a == null || b == null || c == null) throw new InvalidOperationException("tubi di prova non creati.");
+                var c1 = FindConnectorAt(a, at);
+                var c2 = FindConnectorAt(b, at);
+                var c3 = FindConnectorAt(c, at);
+                if (c1 == null || c2 == null || c3 == null) throw new InvalidOperationException("connettori di prova non trovati.");
+                var tee = _doc.Create.NewTeeFitting(c1, c2, c3);
+                if (tee == null) throw new InvalidOperationException("Revit non ha restituito il raccordo di prova.");
+                _doc.Regenerate();
+                fittings.Add(tee.Id);
+                var face = FindNearestEnd(a, at);
+                if (face == null) throw new InvalidOperationException("connettore del tubo di prova non trovato.");
+                room = Math.Max(0, Units.FtToMm((at - face.Origin).DotProduct(dir)));
+                var faceAfter = FindNearestEnd(b, at);
+                Diag("  banco: T del bypass DN" + MepSize.Fmt(before.DiameterMm) + "→DN" + MepSize.Fmt(after.DiameterMm) + " con derivazione DN" +
+                     MepSize.Fmt(branchSize.DiameterMm) + " consuma " + PlanFormatter.Len(room.Value) + " verso il tubo prima" +
+                     (faceAfter == null ? "" : " e " + PlanFormatter.Len(Math.Max(0, Units.FtToMm((faceAfter.Origin - at).DotProduct(dir)))) + " verso il tubo dopo") + ".");
+            }
+            catch (Exception ex)
+            {
+                Diag("  banco: prova del T del bypass non riuscita (" + ex.Message + "): spazio stimato.");
+            }
+            finally
+            {
+                // via tutto: i raccordi attaccati ai tubi di prova (T e riduzioni automatiche), poi i tubi
+                foreach (var pipe in pipes)
+                {
+                    try
+                    {
+                        foreach (Connector pc in pipe.ConnectorManager.Connectors)
+                        {
+                            if (!IsPipeEnd(pc)) continue;
+                            foreach (Connector r in pc.AllRefs)
+                            {
+                                var owner = r.Owner as FamilyInstance;
+                                if (owner == null) continue;
+                                fittings.Add(owner.Id);
+                                foreach (Connector oc in owner.MEPModel.ConnectorManager.Connectors)
+                                    foreach (Connector rr in oc.AllRefs)
+                                    {
+                                        var o2 = rr.Owner as FamilyInstance;
+                                        if (o2 != null) fittings.Add(o2.Id);
+                                    }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // solo raccolta
+                    }
+                }
+                foreach (var id in fittings)
+                {
+                    try { if (_doc.GetElement(id) != null) _doc.Delete(id); } catch { }
+                }
+                foreach (var pipe in pipes) DeleteCurve(pipe);
+            }
+            _teeRoomCache[key] = room;
+            return room;
+        }
+
+        /// <summary>L'altro connettore di estremità di un tubo.</summary>
+        private static Connector OtherEnd(MEPCurve curve, Connector one)
+        {
+            if (curve == null || one == null) return null;
+            foreach (Connector c in curve.ConnectorManager.Connectors)
+            {
+                if (!IsPipeEnd(c)) continue;
+                if (c.Id != one.Id) return c;
+            }
+            return null;
+        }
 
         private static double SafeRadius(Connector c)
         {

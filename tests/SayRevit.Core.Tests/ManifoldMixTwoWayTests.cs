@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Linq;
 using SayRevit.Core.Model;
 using Xunit;
@@ -336,6 +336,68 @@ namespace SayRevit.Core.Tests
             Assert.Contains(p.ToParseResult().Notes, n => n.Contains("DN32 su un circuito DN50") && n.Contains("riduzione"));
             Assert.Equal(new[] { "ev025r2+bac_(1)", "ev032r2+bac_(1)", "ev050r2+bac_(1)", "ev050r2+mid_(1)", "ev125f+bac (1)" },
                 p.EnergyValveFamilies().Select(f => f.Name).ToArray());
+        }
+
+        [Fact]
+        public void EnergyValve_FamigliaUnicaBelimo2027_TipoPerDnDalNome()
+        {
+            const string belimo = "Belimo_EV015-050_R2_BAC_RFA_2027_LevelBased";
+            var p = Plan(Mix2(40), Mix2(65));
+            p.AccessoryFamilies.Add(Family(belimo, "EV015R2+BAC", "EV020R2+BAC", "EV025R2+BAC", "EV032R2+BAC", "EV040R2+BAC", "EV050R2+BAC"));
+
+            // i DN vengono dai nomi dei tipi: il DN40, assente tra le vecchie famiglie, ora c'e'
+            Assert.Equal(new[] { 15.0, 20, 25, 32, 40, 50, 125 }, p.EnergyValveDns());
+            var ev40 = p.EnergyValveFor(p.Circuits[0]);
+            Assert.Equal(belimo, ev40.FamilyName);
+            Assert.Equal("EV040R2+BAC", ev40.TypeName);
+            Assert.Equal(40, ev40.DnMm);
+
+            // a parita' di DN e di "+BAC" la famiglia unica vince sulla vecchia famiglia per DN
+            var ev50 = p.EnergyValveFor(50);
+            Assert.Equal(belimo, ev50.FamilyName);
+            Assert.Equal("EV050R2+BAC", ev50.TypeName);
+            Assert.Contains(belimo, p.ConfiguredFamilies());
+            Assert.Equal(belimo, p.EnergyValveFamilies().First().Name);
+
+            // DN65 non c'e': automatica -> nessuna (avviso); fissata nella riga -> il tipo piu' grande sotto (DN50) con riduzioni
+            var r = p.ToParseResult();
+            Assert.Contains(r.Warnings, w => w.StartsWith("C2 DN65: nessuna famiglia di energy valve"));
+            Assert.Contains(r.Notes, n => n.StartsWith("C1 DN40 → energy valve \"" + belimo + "\" tipo \"EV040R2+BAC\" (automatica sul DN)"));
+            p.Circuits[1].EnergyValveFamily = belimo;
+            var ev65 = p.EnergyValveFor(p.Circuits[1]);
+            Assert.Equal("EV050R2+BAC", ev65.TypeName);
+            Assert.Equal(65, ev65.DnMm);
+            Assert.Equal(50, ManifoldPlan.EnergyValveStraightDn(ev65, 65));
+            r = p.ToParseResult();
+            Assert.Contains(r.Notes, n => n.StartsWith("C2: energy valve DN50 su un circuito DN65") && n.Contains("riduzione"));
+            Assert.DoesNotContain(r.Warnings, w => w.StartsWith("C2 DN65: nessuna famiglia"));
+
+            // la catena del ritorno monta il tipo del DN del circuito
+            var ret = p.ChainFor(p.Circuits[0], false);
+            var piece = ret.Single(i => i.Piece != null && i.Piece.Kind == ValveKind.EnergyValve).Piece;
+            Assert.Equal("EV040R2+BAC", piece.TypeName);
+
+            // tipo esplicitato nella riga: vince sul DN del circuito e va e viene dalle impostazioni
+            p.Circuits[0].EnergyValveFamily = belimo;
+            p.Circuits[0].EnergyValveType = "EV025R2+BAC";
+            var ev25 = p.EnergyValveFor(p.Circuits[0]);
+            Assert.Equal("EV025R2+BAC", ev25.TypeName);
+            Assert.Equal(40, ev25.DnMm);
+            Assert.Equal(25, ManifoldPlan.EnergyValveStraightDn(ev25, 40));
+            Assert.Contains(p.ToParseResult().Notes, n => n.StartsWith("C1: energy valve DN25 su un circuito DN40"));
+            var text = ManifoldPlan.CircuitToString(p.Circuits[0]);
+            Assert.Equal("40:mix2|ev=" + belimo + "|evt=EV025R2+BAC", text);
+            var back = ManifoldPlan.ParseCircuit(text);
+            Assert.Equal(belimo, back.EnergyValveFamily);
+            Assert.Equal("EV025R2+BAC", back.EnergyValveType);
+            // tipo non esistente nella famiglia: si torna al DN del circuito
+            p.Circuits[0].EnergyValveType = "EV999R2+BAC";
+            Assert.Equal("EV040R2+BAC", p.EnergyValveFor(p.Circuits[0]).TypeName);
+
+            // voci della tendina: un tipo per DN per la famiglia unica, la famiglia sola per le vecchie
+            var labels = p.EnergyValveChoices().Select(c => c.Label).ToList();
+            Assert.Contains("EV025R2+BAC — " + belimo, labels);
+            Assert.Contains("EV025R2+BAC — ev025r2+bac_(1)", labels); // anche le vecchie famiglie portano il DN nel tipo
         }
 
         [Fact]

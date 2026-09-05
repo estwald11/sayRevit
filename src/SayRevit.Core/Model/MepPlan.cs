@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -132,6 +132,7 @@ namespace SayRevit.Core.Model
                 case ValveKind.ZoneValve: return "valvola di zona";
                 case ValveKind.Strainer: return "filtro a Y";
                 case ValveKind.CheckValve: return "valvola di ritegno";
+                case ValveKind.Pump: return "pompa";
                 default: return "valvola boax";
             }
         }

@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using SayRevit.Core.Model;
 using Xunit;
 
@@ -72,7 +72,7 @@ namespace SayRevit.Core.Tests
 
             var strainer = p.PieceFor(ManifoldElements.Strainer, 50);
             Assert.Equal(ValveKind.Strainer, strainer.Kind);
-            Assert.False(strainer.WithFlanges);
+            Assert.True(strainer.WithFlanges); // il filtro a Y va tra due flange, salvo famiglie filettate o con flange proprie (NoFlangeHints)
             Assert.Null(p.PieceFor(ManifoldElements.CheckValve, 50)); // senza famiglia
         }
 
@@ -103,7 +103,7 @@ namespace SayRevit.Core.Tests
                 p.DescribeChain(c, true));
 
             var ret = p.DescribeChain(c, false);
-            Assert.StartsWith("collettore → [boax DN50*] — 150 — [energy valve DN50] — (tratto rettilineo 5×Øint sopra la energy valve 250) — [T →DN40] — 150 — [filtro Y DN40] — 50 — [zona DN40*] — 50 — [boax DN40*] — 100 fine", ret);
+            Assert.StartsWith("collettore → [boax DN50*] — 150 — [energy valve DN50] — (tratto rettilineo 5×Øint sopra la energy valve 250) — [T →DN40] — 150 — [filtro Y DN40*] — 50 — [zona DN40*] — 50 — [boax DN40*] — 100 fine", ret);
 
             var r = p.ToParseResult();
             Assert.Contains(r.Notes, n => n.StartsWith("C1 mandata: collettore → [boax DN50*]"));

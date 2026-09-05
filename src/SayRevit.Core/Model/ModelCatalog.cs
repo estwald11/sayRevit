@@ -1,4 +1,5 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Linq;
 
 namespace SayRevit.Core.Model
 {
@@ -60,6 +61,15 @@ namespace SayRevit.Core.Model
 
         /// <summary>Famiglie di accessori per tubazioni (valvole e simili) caricate nel progetto.</summary>
         public List<CatalogFamily> PipeAccessories { get; } = new List<CatalogFamily>();
+
+        /// <summary>Famiglie di attrezzature meccaniche (pompe) caricate nel progetto.</summary>
+        public List<CatalogFamily> MechanicalEquipment { get; } = new List<CatalogFamily>();
+
+        /// <summary>Tutte le famiglie montabili in linea sugli stacchi: accessori per tubazioni e attrezzature meccaniche.</summary>
+        public IEnumerable<CatalogFamily> AllAccessories
+        {
+            get { return PipeAccessories.Concat(MechanicalEquipment); }
+        }
         public List<string> Levels { get; } = new List<string>();
         public string ActiveLevel { get; set; }
         public string ProjectUnitsNote { get; set; }
